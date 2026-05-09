@@ -1,0 +1,23 @@
+{
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "VITE_OPENAI_API_KEY",
+      "models": {
+        "gpt-4o-mini": {
+          "name": "GPT-4o Mini",
+          "maxTokens": 4096,
+          "costPer1kTokens": 0.00015
+        },
+        "gpt-4o": {
+          "name": "GPT-4o",
+          "maxTokens": 4096,
+          "costPer1kTokens": 0.0025
+        }
+      }
+    }
+  },
+  "defaultProvider": "openai",
+  "fallbackProvider": null
+}
