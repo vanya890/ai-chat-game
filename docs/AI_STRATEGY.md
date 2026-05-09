@@ -1,5 +1,13 @@
 # AI Chat Game — AI Generation Strategy
 
+## Quick Links
+
+- [Token Dashboard](TOKEN_DASHBOARD.md) — Track your token usage and costs
+- [Character Editor Guide](CHARACTER_EDITOR.md) — Write efficient system prompts
+- [Troubleshooting](TROUBLESHOOTING.md) — Fix common issues
+
+---
+
 ## Goals
 
 1. **Minimize token cost** — send only what's necessary

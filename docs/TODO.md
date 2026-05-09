@@ -1,5 +1,14 @@
 # TODO
 
+## Quick Links
+
+- [Character Editor Guide](CHARACTER_EDITOR.md) — Creating characters via UI
+- [Token Dashboard](TOKEN_DASHBOARD.md) — Tracking usage and costs
+- [Deployment Guide](DEPLOYMENT.md) — Setup instructions
+- [Troubleshooting](TROUBLESHOOTING.md) — Common issues
+
+---
+
 ## Phase 1: Foundation (MVP) — Обновлено 09.05.2026
 
 ### 1.7 Поддержка бесплатных и локальных моделей (Высокий приоритет)
