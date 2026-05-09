@@ -1,199 +1,32 @@
-# AI Chat Game — TODO & Features Roadmap
+# TODO
 
-## Phase 1: Foundation (MVP)
+## Phase 1: Foundation (MVP) — Обновлено 09.05.2026
 
-### 1.1 Project Setup
-- [ ] Initialize Vite + React + TypeScript project
-- [ ] Configure ESLint, Prettier, Husky
-- [ ] Set up folder structure per architecture doc
-- [ ] Add basic CI workflow (lint + type check)
+### 1.7 Поддержка бесплатных и локальных моделей (Высокий приоритет)
 
-### 1.2 Configuration System
-- [ ] Create `config/` directory structure
-- [ ] Implement `ConfigLoader` service
-- [ ] Create first character config (detective)
-- [ ] Add config validation (Zod schemas)
-- [ ] Write unit tests for config loading
+* Реализовать **OpenAI-compatible** интерфейс провайдеров.
+* Добавить `LocalProvider` / `OllamaProvider`:
+  - Базовый URL (по умолчанию `http://localhost:11434/v1` для Ollama).
+  - Поддержка моделей из Ollama / LM Studio / AnythingLLM и других совместимых серверов.
+  - Автоматическое обнаружение доступных моделей.
+  - Настройки: baseUrl, model, apiKey (опционально).
+* В настройках и конфиге персонажа — выбор провайдера с приоритетом локальных моделей (нулевые затраты).
+* Mock-провайдер для разработки без запущенного сервера.
 
-### 1.3 AI Provider Layer
-- [ ] Define `AIProvider` interface
-- [ ] Implement `OpenAIProvider`
-- [ ] Add provider registry (resolve by config)
-- [ ] Mock provider for testing
-- [ ] Write unit tests (mocked responses)
+**Цель:** Пользователь может сразу использовать приложение без API-ключей и затрат.
 
-### 1.4 State Management
-- [ ] Set up Zustand
-- [ ] Create `chatStore` with actions
-- [ ] Create `characterStore`
-- [ ] Write store unit tests
+### 1.8 Импорт / Экспорт данных
 
-### 1.5 Core UI
-- [ ] Character selection screen
-- [ ] Chat window (messages list)
-- [ ] Message input with send
-- [ ] Typing indicator
-- [ ] Basic responsive layout
+* Экспорт всех чатов и персонажей в ZIP (JSON + avatars).
+* Импорт из ZIP или отдельных JSON-файлов.
+* Экспорт/импорт отдельных персонажей (для обмена в сообществе).
+* Экспорт отдельного чата в TXT/Markdown/JSON.
+* Кнопки в настройках и в меню персонажей/чатов.
 
-### 1.6 Chat Engine
-- [ ] Build message context (system + history)
-- [ ] Send message flow
-- [ ] Streaming response handling
-- [ ] Error handling + retry
-- [ ] Integration tests
+### 1.9 Мультиязычность
 
----
-
-## Phase 2: Polish & Features
-
-### 2.1 Character System
-- [ ] Multiple character configs
-- [ ] Character profiles with details
-- [ ] Character avatars
-- [ ] Character-specific greetings
-- [ ] Character search/filter
-
-### 2.2 Chat History
-- [ ] Local storage persistence
-- [ ] Chat list sidebar
-- [ ] Resume previous chats
-- [ ] Delete/rename chats
-- [ ] Export chat as text
-
-### 2.3 UI/UX
-- [ ] Theme system (light/dark/custom)
-- [ ] Animations (message appear, typing)
-- [ ] Mobile-first responsive design
-- [ ] Accessibility (a11y)
-- [ ] Loading states and skeletons
-
-### 2.4 Settings
-- [ ] AI provider selection
-- [ ] Model selection per character
-- [ ] Temperature/top-p controls
-- [ ] Message history length setting
-- [ ] Theme preferences
-
----
-
-## Phase 3: Advanced Features
-
-### 3.1 Multi-Provider Support
-- [ ] Anthropic (Claude) provider
-- [ ] Local LLM provider (Ollama)
-- [ ] Provider fallback chain
-- [ ] Cost tracking per provider
-
-### 3.2 Character Memory
-- [ ] Long-term memory per character
-- [ ] Memory summarization
-- [ ] Character learns from conversations
-- [ ] Memory persistence
-
-### 3.3 Social Features
-- [ ] Share character configs
-- [ ] Community character gallery
-- [ ] Rate/review characters
-- [ ] Character creation wizard
-
-### 3.4 Analytics
-- [ ] Usage statistics
-- [ ] Token consumption tracking
-- [ ] Popular characters
-- [ ] Session duration
-
----
-
-## Phase 4: Production Ready
-
-### 4.1 Performance
-- [ ] Code splitting
-- [ ] Virtual scrolling for long chats
-- [ ] Message caching
-- [ ] PWA support (offline mode)
-
-### 4.2 Testing
-- [ ] Unit tests (80%+ coverage)
-- [ ] Integration tests
-- [ ] E2E tests (Playwright)
-- [ ] Visual regression tests
-
-### 4.3 Deployment
-- [ ] Vercel/Netlify deployment
-- [ ] Environment variables
-- [ ] CDN optimization
-- [ ] Monitoring (Sentry)
-
----
-
-## Feature Specifications
-
-### Chat Flow
-```
-1. User selects character from gallery
-2. Chat opens with character greeting
-3. User types message
-4. System builds context:
-   - systemPrompt from character config
-   - Last N messages from history
-   - User message
-5. AI provider processes request
-6. Response streams to UI in real-time
-7. Chat saved to local storage
-```
-
-### Character Config Schema
-```json
-{
-  "id": "string (unique)",
-  "name": "string",
-  "avatar": "string (path or URL)",
-  "description": "string",
-  "personality": "string",
-  "systemPrompt": "string",
-  "greeting": "string",
-  "aiProvider": "string (provider key)",
-  "model": "string",
-  "temperature": "number (0-1)",
-  "maxTokens": "number",
-  "tags": "string[]",
-  "voiceStyle": "string (optional)"
-}
-```
-
-### AI Provider Interface
-```typescript
-interface AIProvider {
-  name: string;
-  sendMessage(
-    messages: Message[],
-    config: AIConfig
-  ): Promise<string>;
-  
-  streamMessage(
-    messages: Message[],
-    config: AIConfig
-  ): AsyncIterable<string>;
-  
-  validateConfig(config: AIConfig): boolean;
-}
-```
-
----
-
-## Testing Checklist
-
-Each module must have:
-- [ ] Unit tests for pure functions
-- [ ] Mock tests for external services
-- [ ] Integration tests for module boundaries
-- [ ] Error case coverage
-- [ ] Edge case documentation
-
-## Definition of Done
-- [ ] Code reviewed
-- [ ] Tests passing
-- [ ] No TypeScript errors
-- [ ] Linting clean
-- [ ] Documentation updated
-- [ ] Works on mobile
+* Выбор языка интерфейса в настройках (Русский, English, и др.).
+* Автоопределение языка браузера при первом запуске.
+* Поддержка смены языка во время сессии (i18next + React).
+* Все строки вынести в переводы.
+* В system prompt персонажа автоматически добавлять `"Respond in the user's language"` или конкретный язык.
