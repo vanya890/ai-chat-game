@@ -1,5 +1,14 @@
 # AI Chat Game — Features & User Experience
 
+## Quick Links
+
+- [Character Editor Guide](CHARACTER_EDITOR.md) — How to create compelling characters
+- [Token Dashboard](TOKEN_DASHBOARD.md) — Usage tracking and cost optimization
+- [Deployment Guide](DEPLOYMENT.md) — Setup and hosting options
+- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and solutions
+
+---
+
 ## User Experience Flow
 
 ### First Launch

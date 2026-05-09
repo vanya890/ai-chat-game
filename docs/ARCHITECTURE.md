@@ -1,5 +1,14 @@
 # AI Chat Game — Architecture
 
+## Quick Links
+
+- [Features](FEATURES.md) — Complete feature list and UX flows
+- [Character Editor Guide](CHARACTER_EDITOR.md) — Creating characters
+- [AI Strategy](AI_STRATEGY.md) — Token optimization techniques
+- [Deployment Guide](DEPLOYMENT.md) — Setup and hosting
+
+---
+
 ## Principles
 
 - **Modular** — each feature is isolated, easy to test and replace
