@@ -1,5 +1,12 @@
 # AI Chat Game — Scaling Considerations
 
+## Design Philosophy
+
+**Self-contained deployment.** No CDN, no external services required.
+Works on a single laptop, a VPS, or a cluster — same codebase.
+
+---
+
 ## Current Architecture Limits
 
 | Component | Current Approach | Limit | Problem at Scale |
@@ -14,12 +21,6 @@
 ## Scaling to 100K+ Characters
 
 ### Problem: Loading all character configs at startup
-```typescript
-// BAD — loads everything
-const allChars = await Promise.all(
-  characterFiles.map(f => import(`../config/characters/${f}`))
-);
-```
 
 ### Solution: On-demand loading + indexing
 
@@ -38,56 +39,66 @@ const allChars = await Promise.all(
 
 **2. Full config loaded only when selected:**
 ```typescript
-// GOOD — lazy load
+// Lazy load — fetch only what's needed
 const character = await fetch(`/api/characters/${id}`);
 ```
 
 **3. Pagination + search:**
 - Index file split into chunks (by letter, category, or page)
-- Search via API, not client-side filtering
-- CDN-cached index files
+- Search via API endpoint, not client-side filtering
+- Static file serving (no CDN needed)
 
 ---
 
 ## Scaling to 100K+ Users
 
-### Problem: Everything is client-side
-
-### Solution: Backend layer
+### Deployment Modes
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   CDN (Cloudflare)               │
-│  Static assets, character index, avatars         │
-├─────────────────────────────────────────────────┤
-│                   API Gateway                    │
-│  Rate limiting, auth, routing                    │
-├─────────────────────────────────────────────────┤
-│                   Backend Services               │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │ Character│  │   Chat   │  │  AI Proxy    │  │
-│  │  Service │  │ Service  │  │  Service     │  │
-│  └──────────┘  └──────────┘  └──────────────┘  │
-├─────────────────────────────────────────────────┤
-│                   Data Layer                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │PostgreSQL│  │  Redis   │  │  S3/CDN      │  │
-│  │(users,   │  │(cache,   │  │(avatars,     │  │
-│  │ chats)   │  │sessions) │  │ configs)     │  │
-│  └──────────┘  └──────────┘  └──────────────┘  │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Mode 1: Single Device (MVP)                        │
+│  ┌─────────────────────────────────────────────┐   │
+│  │              Browser (React App)             │   │
+│  │  localStorage  │  Direct API calls          │   │
+│  └─────────────────────────────────────────────┘   │
+│  No server needed. Works offline.                  │
+└─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│  Mode 2: Single Server (Self-hosted)                │
+│  ┌─────────────────────────────────────────────┐   │
+│  │              Nginx / Caddy                   │   │
+│  │         (static files + reverse proxy)       │   │
+│  ├─────────────────────────────────────────────┤   │
+│  │              Backend (Node.js)               │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  │   │
+│  │  │Character │  │  Chat    │  │ AI Proxy │  │   │
+│  │  │ Service  │  │ Service  │  │ Service  │  │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  │   │
+│  ├─────────────────────────────────────────────┤   │
+│  │              SQLite / PostgreSQL             │   │
+│  │  (characters, users, chats, cache)          │   │
+│  └─────────────────────────────────────────────┘   │
+│  One docker-compose up. That's it.                 │
+└─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│  Mode 3: Multi-server (Production)                  │
+│  Same codebase, just add replicas + load balancer   │
+│  PostgreSQL cluster, Redis for cache                │
+└─────────────────────────────────────────────────────┘
 ```
 
 ### Key Changes for Scale:
 
-| Area | MVP | Production |
-|------|-----|------------|
-| Character storage | JSON files | PostgreSQL + CDN cache |
-| Chat history | localStorage | PostgreSQL (user's chats) |
-| AI requests | Browser → OpenAI | Backend proxy with rate limiting |
-| Auth | None | JWT / OAuth |
-| Caching | None | Redis (character configs, responses) |
-| Search | Client-side filter | Elasticsearch / PostgreSQL full-text |
+| Area | MVP (client-only) | Server mode |
+|------|-------------------|-------------|
+| Character storage | JSON files | SQLite/PostgreSQL |
+| Chat history | localStorage | Database |
+| AI requests | Browser → OpenAI | Backend proxy |
+| Auth | None | JWT / session |
+| Caching | None | In-memory / Redis |
+| Search | Client-side filter | DB full-text search |
 
 ---
 
@@ -97,11 +108,11 @@ const character = await fetch(`/api/characters/${id}`);
 
 ### Solutions:
 
-**1. Response Caching:**
+**1. Response Caching (server-side):**
 ```typescript
 // Cache identical prompts (same character + same user message)
 const cacheKey = hash(character.id + userMessage);
-const cached = await redis.get(cacheKey);
+const cached = await cache.get(cacheKey);
 if (cached) return cached;
 ```
 
@@ -114,12 +125,8 @@ if (cached) return cached;
 - Complex reasoning → expensive model (gpt-4o)
 - Auto-detect based on message complexity
 
-**4. Batch processing:**
-- Queue non-urgent requests
-- Process during off-peak hours (cheaper)
-
-**5. Local fallback:**
-- Cache frequent responses locally
+**4. Local fallback:**
+- Cache frequent responses
 - Use smaller model for common greetings
 
 ---
@@ -129,35 +136,30 @@ if (cached) return cached;
 ### Phase 1 (Current): Client-only
 - JSON configs, localStorage, direct API calls
 - Good for: personal use, demo, <100 characters
+- **Zero setup** — just open index.html
 
-### Phase 2: Hybrid
-- Character index on CDN
-- Full configs fetched on demand
-- Chat history still local
-- Good for: public demo, <10K characters
+### Phase 2: Server mode (same codebase)
+- Backend serves static files + API
+- SQLite by default (zero config), PostgreSQL optional
+- Character index + lazy loading
+- Good for: self-hosted, <10K characters, small teams
+- **One command:** `docker-compose up`
 
-### Phase 3: Full Backend
-- PostgreSQL for users, chats, characters
-- Redis for caching
-- AI proxy service
+### Phase 3: Multi-server
+- Same codebase, add replicas
+- PostgreSQL cluster, Redis for cache
 - Good for: production, 100K+ users
-
-### Phase 4: Distributed
-- Microservices per domain
-- Multi-region deployment
-- AI model self-hosting (optional)
-- Good for: millions of users
 
 ---
 
 ## Performance Targets
 
-| Metric | MVP | Production |
-|--------|-----|------------|
-| Character list load | <1s (all in bundle) | <200ms (cached index) |
-| Character detail load | Instant (local) | <100ms (CDN) |
+| Metric | MVP | Server mode |
+|--------|-----|-------------|
+| Character list load | <1s (all in bundle) | <200ms (indexed) |
+| Character detail load | Instant (local) | <100ms (DB query) |
 | First message response | 1-3s (direct API) | 500ms-2s (cached/proxy) |
-| Chat history load | Instant (local) | <300ms (paginated API) |
+| Chat history load | Instant (local) | <300ms (paginated) |
 | Initial bundle size | <200KB | <100KB (code split) |
 
 ---
@@ -176,4 +178,4 @@ Don't over-engineer yet. The current architecture is correct for Phase 1:
 - When users > 100 → add backend
 - When AI costs > $100/mo → add caching + proxy
 
-*Build the MVP first. The architecture is designed to scale — each layer can be replaced independently.*
+*Build the MVP first. The architecture is designed to scale — each layer can be replaced independently. Same codebase, different deployment modes.*
