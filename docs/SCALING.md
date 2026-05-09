@@ -3,118 +3,196 @@
 ## Design Philosophy
 
 **Self-contained deployment.** No CDN, no external services required.
-Works on a single laptop, a VPS, or a cluster — same codebase.
+Works on a single laptop or a VPS — same codebase, one command to deploy.
 
 ---
 
-## Current Architecture Limits
+## Target: Mode 2 — Single Server (Self-hosted)
 
-| Component | Current Approach | Limit | Problem at Scale |
-|-----------|-----------------|-------|------------------|
-| Characters | JSON files in repo | ~100 chars | Loading all at startup is slow |
-| Chat History | localStorage | ~5-10MB total | Can't store many chats |
-| AI Requests | Direct from browser | Rate limits | No caching, no pooling |
-| Assets | Static files | Bundle size | Slow initial load |
+This is our primary target. Good performance on one machine, easy to deploy.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Single Server Deployment                           │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐   │
+│  │         Nginx / Caddy                       │   │
+│  │    (static files + reverse proxy)           │   │
+│  ├─────────────────────────────────────────────┤   │
+│  │         Backend (Node.js)                   │   │
+│  │                                             │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  │   │
+│  │  │Character │  │  Chat    │  │ AI Proxy │  │   │
+│  │  │ Service  │  │ Service  │  │ Service  │  │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  │   │
+│  │                                             │   │
+│  │  ┌──────────────────────────────────────┐  │   │
+│  │  │  In-memory cache (LRU)               │  │   │
+│  │  │  (no Redis needed for <10K users)    │  │   │
+│  │  └──────────────────────────────────────┘  │   │
+│  ├─────────────────────────────────────────────┤   │
+│  │         SQLite (default)                    │   │
+│  │  (characters, users, chats, cache)          │   │
+│  │  PostgreSQL — optional, drop-in replace     │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  One docker-compose up. That's it.                 │
+└─────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Scaling to 100K+ Characters
+## Performance on Single Server
 
-### Problem: Loading all character configs at startup
+### Character Management (100K+ characters)
 
-### Solution: On-demand loading + indexing
+**Problem:** Loading all character configs at startup is slow.
 
-**1. Character Index (small, loaded at startup):**
+**Solution: Index + lazy loading**
+
 ```json
-// config/characters-index.json
+// config/characters-index.json — loaded at startup (~50KB for 10K chars)
 {
   "characters": [
     { "id": "detective", "name": "Шерлок", "tags": ["detective"], "avatar": "/avatars/detective.png" },
     { "id": "wizard", "name": "Мерлин", "tags": ["fantasy"], "avatar": "/avatars/wizard.png" }
   ],
-  "total": 150000,
-  "lastUpdated": "2026-05-09"
+  "total": 150000
 }
 ```
 
-**2. Full config loaded only when selected:**
+Full config loaded only when user selects a character:
 ```typescript
-// Lazy load — fetch only what's needed
 const character = await fetch(`/api/characters/${id}`);
 ```
 
-**3. Pagination + search:**
-- Index file split into chunks (by letter, category, or page)
-- Search via API endpoint, not client-side filtering
-- Static file serving (no CDN needed)
+**Database schema (SQLite):**
+```sql
+CREATE TABLE characters (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  avatar TEXT,
+  description TEXT,
+  personality TEXT,
+  system_prompt TEXT,
+  greeting TEXT,
+  ai_provider TEXT,
+  model TEXT,
+  temperature REAL,
+  max_tokens INTEGER,
+  tags TEXT,  -- JSON array
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
----
-
-## Scaling to 100K+ Users
-
-### Deployment Modes
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Mode 1: Single Device (MVP)                        │
-│  ┌─────────────────────────────────────────────┐   │
-│  │              Browser (React App)             │   │
-│  │  localStorage  │  Direct API calls          │   │
-│  └─────────────────────────────────────────────┘   │
-│  No server needed. Works offline.                  │
-└─────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────┐
-│  Mode 2: Single Server (Self-hosted)                │
-│  ┌─────────────────────────────────────────────┐   │
-│  │              Nginx / Caddy                   │   │
-│  │         (static files + reverse proxy)       │   │
-│  ├─────────────────────────────────────────────┤   │
-│  │              Backend (Node.js)               │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  │   │
-│  │  │Character │  │  Chat    │  │ AI Proxy │  │   │
-│  │  │ Service  │  │ Service  │  │ Service  │  │   │
-│  │  └──────────┘  └──────────┘  └──────────┘  │   │
-│  ├─────────────────────────────────────────────┤   │
-│  │              SQLite / PostgreSQL             │   │
-│  │  (characters, users, chats, cache)          │   │
-│  └─────────────────────────────────────────────┘   │
-│  One docker-compose up. That's it.                 │
-└─────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────┐
-│  Mode 3: Multi-server (Production)                  │
-│  Same codebase, just add replicas + load balancer   │
-│  PostgreSQL cluster, Redis for cache                │
-└─────────────────────────────────────────────────────┘
+CREATE INDEX idx_characters_tags ON characters(tags);
+CREATE INDEX idx_characters_name ON characters(name);
 ```
 
-### Key Changes for Scale:
+### Chat History
 
-| Area | MVP (client-only) | Server mode |
-|------|-------------------|-------------|
-| Character storage | JSON files | SQLite/PostgreSQL |
-| Chat history | localStorage | Database |
-| AI requests | Browser → OpenAI | Backend proxy |
-| Auth | None | JWT / session |
-| Caching | None | In-memory / Redis |
-| Search | Client-side filter | DB full-text search |
+**Problem:** localStorage limited to ~5-10MB.
 
----
+**Solution:** Server-side storage with pagination.
 
-## AI Cost Optimization at Scale
+```sql
+CREATE TABLE chats (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  character_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
-### Problem: Each message = API call = $$$
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  chat_id TEXT REFERENCES chats(id),
+  role TEXT NOT NULL,  -- 'user' | 'assistant' | 'system'
+  content TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
-### Solutions:
+CREATE INDEX idx_messages_chat ON messages(chat_id, created_at);
+```
 
-**1. Response Caching (server-side):**
+### AI Proxy + Caching
+
+**Problem:** Each message = API call = slow + expensive.
+
+**Solution:** Backend proxy with in-memory cache.
+
 ```typescript
-// Cache identical prompts (same character + same user message)
-const cacheKey = hash(character.id + userMessage);
-const cached = await cache.get(cacheKey);
-if (cached) return cached;
+// LRU cache — no Redis needed for single server
+const responseCache = new LRUCache({ max: 1000 });
+
+async function sendMessage(character: Character, userMessage: string) {
+  const cacheKey = hash(character.id + userMessage);
+  
+  const cached = responseCache.get(cacheKey);
+  if (cached) return cached;
+  
+  const response = await aiProvider.sendMessage(...);
+  responseCache.set(cacheKey, response);
+  return response;
+}
 ```
+
+### Search
+
+**Problem:** Client-side filtering is slow with many characters.
+
+**Solution:** SQLite full-text search.
+
+```sql
+CREATE VIRTUAL TABLE characters_fts USING fts5(
+  name, description, personality, tags,
+  content='characters'
+);
+
+-- Search query
+SELECT * FROM characters_fts WHERE characters_fts MATCH 'detective british';
+```
+
+---
+
+## Deployment
+
+### docker-compose.yml
+
+```yaml
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data        # SQLite database
+      - ./config:/app/config    # Character configs
+      - ./avatars:/app/avatars  # Character images
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - NODE_ENV=production
+    restart: unless-stopped
+```
+
+That's it. One file, one command.
+
+### Resource Requirements
+
+| Metric | Value |
+|--------|-------|
+| RAM | 256MB (idle) — 512MB (under load) |
+| CPU | 1 core sufficient |
+| Disk | ~100MB + database size |
+| Database | SQLite file, auto-managed |
+
+---
+
+## AI Cost Optimization
+
+**1. Response Caching:**
+- Cache identical prompts (same character + same user message)
+- LRU cache, 1000 entries (~5MB RAM)
 
 **2. Streaming with cancellation:**
 - User can cancel mid-response
@@ -123,44 +201,42 @@ if (cached) return cached;
 **3. Model tiering:**
 - Simple responses → cheaper model (gpt-4o-mini)
 - Complex reasoning → expensive model (gpt-4o)
-- Auto-detect based on message complexity
-
-**4. Local fallback:**
-- Cache frequent responses
-- Use smaller model for common greetings
 
 ---
 
-## Migration Path: MVP → Production
+## Migration Path
 
-### Phase 1 (Current): Client-only
+### Phase 1 (Current): Client-only MVP
 - JSON configs, localStorage, direct API calls
+- **Zero setup** — just open in browser
 - Good for: personal use, demo, <100 characters
-- **Zero setup** — just open index.html
 
-### Phase 2: Server mode (same codebase)
+### Phase 2: Single Server (our target)
 - Backend serves static files + API
 - SQLite by default (zero config), PostgreSQL optional
-- Character index + lazy loading
-- Good for: self-hosted, <10K characters, small teams
+- Character index + lazy loading + FTS search
+- In-memory LRU cache (no Redis)
 - **One command:** `docker-compose up`
+- Good for: self-hosted, <100K characters, <10K users
 
-### Phase 3: Multi-server
-- Same codebase, add replicas
-- PostgreSQL cluster, Redis for cache
-- Good for: production, 100K+ users
+### Phase 3 (Future, theoretical): Multi-server
+- Same codebase, add replicas + load balancer
+- PostgreSQL cluster, Redis for distributed cache
+- Only needed if single server can't handle the load
 
 ---
 
-## Performance Targets
+## Performance Targets (Single Server)
 
-| Metric | MVP | Server mode |
-|--------|-----|-------------|
-| Character list load | <1s (all in bundle) | <200ms (indexed) |
-| Character detail load | Instant (local) | <100ms (DB query) |
-| First message response | 1-3s (direct API) | 500ms-2s (cached/proxy) |
-| Chat history load | Instant (local) | <300ms (paginated) |
-| Initial bundle size | <200KB | <100KB (code split) |
+| Metric | Target |
+|--------|--------|
+| Character list load | <200ms (indexed query) |
+| Character search | <100ms (FTS) |
+| Character detail load | <50ms (single row query) |
+| First message response | 500ms-2s (cached/proxy) |
+| Chat history load | <200ms (paginated, 50 messages) |
+| Initial bundle size | <100KB (code split) |
+| Memory usage | <512MB |
 
 ---
 
@@ -173,9 +249,9 @@ Don't over-engineer yet. The current architecture is correct for Phase 1:
 3. ✅ Modular layers — extract to services later
 4. ✅ Zustand — replace with server state later
 
-**When to refactor:**
-- When character count > 500 → add index + lazy loading
-- When users > 100 → add backend
+**When to add server mode:**
+- When character count > 500 → add index + lazy loading + SQLite
+- When users > 1 → add backend
 - When AI costs > $100/mo → add caching + proxy
 
-*Build the MVP first. The architecture is designed to scale — each layer can be replaced independently. Same codebase, different deployment modes.*
+*Build the MVP first. The architecture is designed to scale to single-server mode — each layer can be replaced independently. Same codebase, different deployment modes.*
