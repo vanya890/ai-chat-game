@@ -1,89 +1,120 @@
-import { create } from 'zustand'
-import type { Character } from '../types'
-import { getCharacters, saveCharacter, deleteCharacter } from '../db'
+import { create } from 'zustand';
+import type { Character } from '../types';
+import { db } from '../db';
+import detectiveConfig from '../../config/characters/detective.json';
+import wizardConfig from '../../config/characters/wizard.json';
 
-interface CharacterStore {
-  characters: Character[]
-  loading: boolean
-  searchQuery: string
-  selectedTags: string[]
-  loadCharacters: () => Promise<void>
-  addCharacter: (character: Character) => Promise<void>
-  updateCharacter: (character: Character) => Promise<void>
-  removeCharacter: (id: string) => Promise<void>
-  setSearchQuery: (query: string) => void
-  toggleTag: (tag: string) => void
-  filteredCharacters: () => Character[]
-  getAllTags: () => string[]
+interface CharacterState {
+  characters: Character[];
+  isLoading: boolean;
+  loadCharacters: () => Promise<void>;
+  getCharacter: (id: string) => Character | undefined;
+  addCharacter: (character: Character) => Promise<void>;
+  updateCharacter: (id: string, updates: Partial<Character>) => Promise<void>;
+  deleteCharacter: (id: string) => Promise<void>;
+  searchCharacters: (query: string) => Character[];
+  filterByTags: (tags: string[]) => Character[];
 }
 
-export const useCharacterStore = create<CharacterStore>((set, get) => ({
+const defaultCharacters: Character[] = [
+  {
+    id: detectiveConfig.id,
+    name: detectiveConfig.name,
+    avatar: detectiveConfig.avatar,
+    description: detectiveConfig.description,
+    personality: detectiveConfig.personality,
+    systemPrompt: detectiveConfig.systemPrompt,
+    greeting: detectiveConfig.greeting,
+    aiProvider: detectiveConfig.aiProvider || 'openai',
+    model: detectiveConfig.model || 'gpt-4o-mini',
+    temperature: detectiveConfig.temperature ?? 0.5,
+    maxTokens: detectiveConfig.maxTokens ?? 300,
+    tags: detectiveConfig.tags,
+    isUserCreated: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: wizardConfig.id,
+    name: wizardConfig.name,
+    avatar: wizardConfig.avatar,
+    description: wizardConfig.description,
+    personality: wizardConfig.personality,
+    systemPrompt: wizardConfig.systemPrompt,
+    greeting: wizardConfig.greeting,
+    aiProvider: wizardConfig.aiProvider || 'openai',
+    model: wizardConfig.model || 'gpt-4o-mini',
+    temperature: wizardConfig.temperature ?? 0.7,
+    maxTokens: wizardConfig.maxTokens ?? 400,
+    tags: wizardConfig.tags,
+    isUserCreated: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }
+];
+
+export const useCharacterStore = create<CharacterState>((set, get) => ({
   characters: [],
-  loading: false,
-  searchQuery: '',
-  selectedTags: [],
+  isLoading: true,
 
   loadCharacters: async () => {
-    set({ loading: true })
     try {
-      const characters = await getCharacters()
-      set({ characters, loading: false })
+      const stored = await db.characters.toArray();
+      if (stored.length === 0) {
+        await db.characters.bulkAdd(defaultCharacters);
+        set({ characters: defaultCharacters, isLoading: false });
+      } else {
+        // Merge: add defaults for any missing built-in characters
+        const storedIds = new Set(stored.map(c => c.id));
+        const missing = defaultCharacters.filter(c => !storedIds.has(c.id));
+        if (missing.length > 0) {
+          await db.characters.bulkAdd(missing);
+        }
+        const all = await db.characters.toArray();
+        set({ characters: all, isLoading: false });
+      }
     } catch (error) {
-      console.error('Failed to load characters:', error)
-      set({ loading: false })
+      console.error('Failed to load characters:', error);
+      set({ characters: defaultCharacters, isLoading: false });
     }
+  },
+
+  getCharacter: (id) => {
+    return get().characters.find(c => c.id === id);
   },
 
   addCharacter: async (character) => {
-    await saveCharacter(character)
-    set((state) => ({ characters: [...state.characters, character] }))
+    await db.characters.add(character);
+    set({ characters: [...get().characters, character] });
   },
 
-  updateCharacter: async (character) => {
-    await saveCharacter({ ...character, updatedAt: new Date().toISOString() })
-    set((state) => ({
-      characters: state.characters.map(c => c.id === character.id ? character : c)
-    }))
-  },
-
-  removeCharacter: async (id) => {
-    await deleteCharacter(id)
-    set((state) => ({ characters: state.characters.filter(c => c.id !== id) }))
-  },
-
-  setSearchQuery: (query) => set({ searchQuery: query }),
-
-  toggleTag: (tag) => set((state) => ({
-    selectedTags: state.selectedTags.includes(tag)
-      ? state.selectedTags.filter(t => t !== tag)
-      : [...state.selectedTags, tag]
-  })),
-
-  filteredCharacters: () => {
-    const { characters, searchQuery, selectedTags } = get()
-    let filtered = characters
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(c =>
-        c.name.toLowerCase().includes(query) ||
-        c.description.toLowerCase().includes(query) ||
-        c.tags.some(t => t.toLowerCase().includes(query))
+  updateCharacter: async (id, updates) => {
+    await db.characters.update(id, { ...updates, updatedAt: new Date().toISOString() });
+    set({
+      characters: get().characters.map(c =>
+        c.id === id ? { ...c, ...updates, updatedAt: new Date().toISOString() } : c
       )
-    }
-
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(c =>
-        selectedTags.some(tag => c.tags.includes(tag))
-      )
-    }
-
-    return filtered
+    });
   },
 
-  getAllTags: () => {
-    const tags = new Set<string>()
-    get().characters.forEach(c => c.tags.forEach(t => tags.add(t)))
-    return Array.from(tags).sort()
+  deleteCharacter: async (id) => {
+    await db.characters.delete(id);
+    set({ characters: get().characters.filter(c => c.id !== id) });
+  },
+
+  searchCharacters: (query) => {
+    const q = query.toLowerCase();
+    return get().characters.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      c.description.toLowerCase().includes(q) ||
+      c.tags.some(t => t.toLowerCase().includes(q))
+    );
+  },
+
+  filterByTags: (tags) => {
+    if (tags.length === 0) return get().characters;
+    return get().characters.filter(c =>
+      tags.some(t => c.tags.includes(t))
+    );
   }
-}))
+}));
