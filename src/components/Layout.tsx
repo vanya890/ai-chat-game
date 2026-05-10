@@ -1,32 +1,38 @@
-import { Outlet } from 'react-router-dom'
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import { MessageSquare, Users, Settings, Sparkles } from 'lucide-react';
 
-export function Layout() {
+export default function Layout() {
+  const location = useLocation();
+
+  const tabs = [
+    { path: '/gallery', icon: Sparkles, label: 'Галерея' },
+    { path: '/chats', icon: MessageSquare, label: 'Мои чаты' },
+    { path: '/characters', icon: Users, label: 'Персонажи' },
+    { path: '/settings', icon: Settings, label: 'Настройки' }
+  ];
+
   return (
     <div className="app-layout">
       <header className="app-header">
-        <a href="/gallery" className="app-logo">
-          <span>AI Chat Game</span>
-        </a>
+        <h1>AI Chat Game</h1>
       </header>
 
-      <main className="app-main">
+      <main className="app-content">
         <Outlet />
       </main>
 
-      <nav className="app-nav">
-        <a href="/gallery" className="nav-item">
-          <span>Галерея</span>
-        </a>
-        <a href="/chats" className="nav-item">
-          <span>Мои чаты</span>
-        </a>
-        <a href="/characters" className="nav-item">
-          <span>Персонажи</span>
-        </a>
-        <a href="/settings" className="nav-item">
-          <span>Настройки</span>
-        </a>
+      <nav className="tab-bar">
+        {tabs.map(tab => (
+          <NavLink
+            key={tab.path}
+            to={tab.path}
+            className={`tab-item ${location.pathname === tab.path ? 'active' : ''}`}
+          >
+            <tab.icon />
+            <span>{tab.label}</span>
+          </NavLink>
+        ))}
       </nav>
     </div>
-  )
+  );
 }
