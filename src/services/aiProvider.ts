@@ -1,210 +1,289 @@
-import OpenAI from 'openai'
-import type { AIProvider, AIResponse, Message, SendMessageConfig, Action, Mood } from '../types'
-import { z } from 'zod'
+import type { AIResponse, Character, Message, ChatSummary } from '../types';
+import { z } from 'zod';
 
-// JSON Schema for AI responses
-const AI_RESPONSE_SCHEMA = {
-  type: 'object',
-  properties: {
-    content: { type: 'string', description: 'The main response text' },
-    done: { type: 'boolean', description: 'True if response is complete' },
-    mood: {
-      type: 'string',
-      enum: ['neutral', 'happy', 'sad', 'angry', 'surprised', 'thoughtful', 'playful', 'serious'],
-      description: "Character's emotional state"
-    },
-    actions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          type: { type: 'string', enum: ['suggestion', 'question', 'command', 'link', 'image'] },
-          label: { type: 'string' },
-          payload: { type: 'string' }
-        },
-        required: ['type', 'label', 'payload']
-      },
-      description: 'Suggested user actions'
-    }
-  },
-  required: ['content', 'done'],
-  additionalProperties: false
-} as const
-
-const AIResponseSchema = z.object({
-  content: z.string().min(1),
+// Zod schema for AI response validation
+export const AIResponseSchema = z.object({
+  content: z.string().min(1).max(4000),
   done: z.boolean(),
-  mood: z.enum(['neutral', 'happy', 'sad', 'angry', 'surprised', 'thoughtful', 'playful', 'serious']).optional(),
+  mood: z.enum(['neutral', 'happy', 'sad', 'angry', 'surprised', 'thoughtful', 'playful', 'serious', 'confident']).optional(),
   actions: z.array(z.object({
     type: z.enum(['suggestion', 'question', 'command', 'link', 'image']),
     label: z.string(),
     payload: z.string()
-  })).max(5).optional()
-})
+  })).max(5).optional(),
+  metadata: z.object({
+    tokenCount: z.number().optional(),
+    responseTime: z.number().optional(),
+    model: z.string().optional()
+  }).optional()
+});
+
+// JSON Schema for OpenAI structured output
+export const AI_RESPONSE_JSON_SCHEMA = {
+  name: 'AIResponse',
+  schema: {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'The main response text from the character' },
+      done: { type: 'boolean', description: 'True if response is complete' },
+      mood: {
+        type: 'string',
+        enum: ['neutral', 'happy', 'sad', 'angry', 'surprised', 'thoughtful', 'playful', 'serious', 'confident'],
+        description: "Character's emotional state"
+      },
+      actions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['suggestion', 'question', 'command', 'link', 'image'] },
+            label: { type: 'string', description: 'Button text' },
+            payload: { type: 'string', description: 'Action data or suggested reply' }
+          },
+          required: ['type', 'label', 'payload']
+        },
+        description: 'Suggested user actions (quick replies)'
+      }
+    },
+    required: ['content', 'done'],
+    additionalProperties: false
+  },
+  strict: true
+};
+
+export interface AIProvider {
+  sendMessage(
+    messages: Array<{ role: string; content: string }>,
+    character: Character,
+    onChunk?: (chunk: string) => void,
+    signal?: AbortSignal
+  ): Promise<AIResponse>;
+
+  generateCharacter(description: string): Promise<Partial<Character>>;
+  summarizeConversation(messages: Message[]): Promise<ChatSummary>;
+}
 
 export class OpenAIProvider implements AIProvider {
-  private buildMessages(messages: Message[], config: SendMessageConfig): Array<{ role: string; content: string }> {
-    return [
-      { role: 'system', content: config.systemPrompt },
-      ...messages.map(m => ({ role: m.role, content: m.content }))
-    ]
+  private apiKey: string;
+  private baseUrl: string;
+
+  constructor(apiKey: string, baseUrl = 'https://api.openai.com/v1') {
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
   }
 
-  async sendMessage(messages: Message[], config: SendMessageConfig): Promise<AIResponse> {
-    const openai = new OpenAI({
-      apiKey: config.apiKey,
-      baseURL: config.baseUrl,
-      dangerouslyAllowBrowser: true
-    })
-
-    const apiMessages = this.buildMessages(messages, config)
-
-    const response = await openai.chat.completions.create({
-      model: config.model,
-      messages: apiMessages,
-      max_tokens: config.maxTokens,
-      temperature: config.temperature,
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'AIResponse',
-          schema: AI_RESPONSE_SCHEMA as any,
-          strict: true
-        }
-      }
-    })
-
-    const raw = response.choices[0].message.content
-    if (!raw) throw new Error('Empty response from AI')
-
-    const parsed = JSON.parse(raw)
-    const validated = AIResponseSchema.parse(parsed)
-
-    return {
-      content: validated.content,
-      done: true,
-      mood: validated.mood,
-      actions: validated.actions,
-      metadata: {
-        tokenCount: response.usage?.total_tokens,
-        model: config.model
-      }
-    }
-  }
-
-  async streamMessage(
-    messages: Message[],
-    config: SendMessageConfig,
-    onChunk: (text: string) => void
+  async sendMessage(
+    messages: Array<{ role: string; content: string }>,
+    character: Character,
+    onChunk?: (chunk: string) => void,
+    signal?: AbortSignal
   ): Promise<AIResponse> {
-    const openai = new OpenAI({
-      apiKey: config.apiKey,
-      baseURL: config.baseUrl,
-      dangerouslyAllowBrowser: true
-    })
+    const startTime = Date.now();
 
-    const apiMessages = this.buildMessages(messages, config)
-
-    const stream = await openai.chat.completions.create({
-      model: config.model,
-      messages: apiMessages,
-      max_tokens: config.maxTokens,
-      temperature: config.temperature,
-      stream: true,
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'AIResponse',
-          schema: AI_RESPONSE_SCHEMA as any,
-          strict: true
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify({
+        model: character.model,
+        messages,
+        max_tokens: character.maxTokens,
+        temperature: character.temperature,
+        stream: true,
+        response_format: {
+          type: 'json_schema',
+          json_schema: AI_RESPONSE_JSON_SCHEMA
         }
-      }
-    })
+      }),
+      signal
+    });
 
-    let fullContent = ''
-    let rawJson = ''
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+    }
 
-    for await (const chunk of stream) {
-      if (config.signal?.aborted) break
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
 
-      const delta = chunk.choices[0]?.delta?.content || ''
-      rawJson += delta
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let contentBuffer = '';
+    let inContent = false;
+    let contentStarted = false;
 
-      // Extract content from streaming JSON
-      try {
-        const match = rawJson.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/)
-        if (match) {
-          const extracted = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"')
-          if (extracted.length > fullContent.length) {
-            fullContent = extracted
-            onChunk(extracted)
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
+
+        // Parse SSE lines
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) {
+              // Extract content from JSON stream
+              if (!contentStarted && delta.includes('"content"')) {
+                contentStarted = true;
+                inContent = true;
+                continue;
+              }
+
+              if (inContent) {
+                // Check if we've left the content field
+                if (delta.includes('"') && (delta.includes('"done"') || delta.includes('"mood"') || delta.includes('"actions"'))) {
+                  inContent = false;
+                  continue;
+                }
+                const cleaned = delta.replace(/["\\]/g, '');
+                contentBuffer += cleaned;
+                onChunk?.(cleaned);
+              }
+            }
+          } catch {
+            // Skip malformed JSON chunks
           }
         }
-      } catch {
-        // JSON not complete yet, skip
       }
+    } catch (error) {
+      if (signal?.aborted) {
+        return {
+          content: contentBuffer || 'Ответ отменён.',
+          done: false
+        };
+      }
+      throw error;
     }
 
-    // Parse full JSON for metadata
+    // Parse full JSON response
     try {
-      const parsed = JSON.parse(rawJson)
-      const validated = AIResponseSchema.parse(parsed)
-      return {
-        content: validated.content || fullContent,
-        done: true,
-        mood: validated.mood,
-        actions: validated.actions
+      const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        const validated = AIResponseSchema.parse(parsed);
+        return {
+          ...validated,
+          metadata: {
+            ...validated.metadata,
+            responseTime: Date.now() - startTime,
+            model: character.model
+          }
+        };
       }
     } catch {
-      // Fallback if JSON parsing fails
-      return {
-        content: fullContent || 'Извини, произошла ошибка при обработке ответа.',
-        done: true,
-        mood: 'neutral'
-      }
+      // Fallback: use content buffer
     }
+
+    return {
+      content: contentBuffer || 'Не удалось получить ответ.',
+      done: true,
+      metadata: {
+        responseTime: Date.now() - startTime,
+        model: character.model
+      }
+    };
   }
-}
 
-// Model selection based on message complexity
-export function estimateComplexity(message: string): 'simple' | 'moderate' | 'complex' {
-  const words = message.split(/\s+/).length
-  const questionMarks = (message.match(/\?/g) || []).length
+  async generateCharacter(description: string): Promise<Partial<Character>> {
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a character creation assistant. Return a JSON object with fields:
+- name: string (character name)
+- description: string (short description, 1-2 sentences)
+- personality: string (3-5 personality traits, comma-separated)
+- systemPrompt: string (concise system prompt, 80-120 tokens, defines behavior and style)
+- greeting: string (character's greeting message)
+- tags: string[] (3-5 relevant tags)
+- temperature: number (0.3-0.9, based on character type)
+- maxTokens: number (200-500)
 
-  if (words < 10 && questionMarks <= 1) return 'simple'
-  if (words < 50 && questionMarks <= 2) return 'moderate'
-  return 'complex'
-}
+Respond in the same language as the user's description. Return ONLY valid JSON.`
+          },
+          { role: 'user', content: description }
+        ],
+        max_tokens: 600,
+        temperature: 0.8,
+        response_format: { type: 'json_object' }
+      })
+    });
 
-export function selectModel(complexity: string, defaultModel: string = 'gpt-4o-mini'): { model: string; maxTokens: number } {
-  switch (complexity) {
-    case 'simple':
-      return { model: 'gpt-4o-mini', maxTokens: 150 }
-    case 'moderate':
-      return { model: 'gpt-4o-mini', maxTokens: 300 }
-    case 'complex':
-      return { model: defaultModel === 'gpt-4o' ? 'gpt-4o' : 'gpt-4o-mini', maxTokens: 600 }
-    default:
-      return { model: 'gpt-4o-mini', maxTokens: 300 }
+    if (!response.ok) throw new Error(`Failed to generate character: ${response.status}`);
+
+    const data = await response.json();
+    const parsed = JSON.parse(data.choices[0].message.content);
+
+    return {
+      name: parsed.name,
+      description: parsed.description,
+      personality: parsed.personality,
+      systemPrompt: parsed.systemPrompt,
+      greeting: parsed.greeting,
+      tags: parsed.tags || [],
+      temperature: parsed.temperature ?? 0.7,
+      maxTokens: parsed.maxTokens ?? 300
+    };
   }
-}
 
-// Build chat context with sliding window
-export function buildChatContext(
-  allMessages: Message[],
-  systemPrompt: string,
-  greeting: string,
-  newUserMessage: string
-): Message[] {
-  const MAX_RECENT = 10
-  const recentMessages = allMessages.slice(-MAX_RECENT)
+  async summarizeConversation(messages: Message[]): Promise<ChatSummary> {
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `Summarize this conversation. Return JSON with:
+- summary: string (brief summary, 3-5 sentences)
+- keyPoints: string[] (important facts to remember, 3-5 items)
+- characterState: string (current situation/context)
 
-  const contextMessages: Message[] = [
-    { id: 'system', chatId: '', role: 'system', content: systemPrompt, timestamp: new Date().toISOString() },
-    { id: 'greeting', chatId: '', role: 'assistant', content: greeting, timestamp: new Date().toISOString() },
-    ...recentMessages,
-    { id: 'new', chatId: '', role: 'user', content: newUserMessage, timestamp: new Date().toISOString() }
-  ]
+Be concise. Return ONLY valid JSON.`
+          },
+          {
+            role: 'user',
+            content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
+          }
+        ],
+        max_tokens: 300,
+        temperature: 0.3,
+        response_format: { type: 'json_object' }
+      })
+    });
 
-  return contextMessages
+    if (!response.ok) throw new Error(`Failed to summarize: ${response.status}`);
+
+    const data = await response.json();
+    const parsed = JSON.parse(data.choices[0].message.content);
+
+    return {
+      summary: parsed.summary || '',
+      keyPoints: parsed.keyPoints || [],
+      characterState: parsed.characterState || '',
+      tokenCount: 0
+    };
+  }
 }
