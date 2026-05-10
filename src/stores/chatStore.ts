@@ -1,176 +1,127 @@
-import { create } from 'zustand'
-import type { Message, Chat, Character, AIResponse } from '../types'
-import { getChat, getMessages, addMessage, createChat, updateChat, getCharacter } from '../db'
-import { OpenAIProvider, estimateComplexity, selectModel, buildChatContext } from '../services/aiProvider'
-import { useAppStore } from './appStore'
+import { create } from 'zustand';
+import type { Chat, Message } from '../types';
+import { db } from '../db';
+import { nanoid } from 'nanoid';
 
 interface ChatState {
-  currentChat: Chat | null
-  messages: Message[]
-  loading: boolean
-  streaming: boolean
-  streamingContent: string
-  abortController: AbortController | null
-  error: string | null
-
-  loadChat: (chatId: string) => Promise<void>
-  sendMessage: (chatId: string, characterId: string, content: string) => Promise<void>
-  stopStreaming: () => void
-  createNewChat: (characterId: string) => Promise<string>
-  clearCurrentChat: () => void
+  chats: Chat[];
+  currentChat: Chat | null;
+  messages: Message[];
+  isLoading: boolean;
+  isSending: boolean;
+  loadChats: () => Promise<void>;
+  createChat: (characterId: string) => Promise<Chat>;
+  openChat: (chatId: string) => Promise<void>;
+  deleteChat: (chatId: string) => Promise<void>;
+  renameChat: (chatId: string, title: string) => Promise<void>;
+  togglePinChat: (chatId: string) => Promise<void>;
+  addMessage: (message: Message) => Promise<void>;
+  setCurrentChat: (chat: Chat | null) => void;
+  setMessages: (messages: Message[]) => void;
 }
 
-const aiProvider = new OpenAIProvider()
-
 export const useChatStore = create<ChatState>((set, get) => ({
+  chats: [],
   currentChat: null,
   messages: [],
-  loading: false,
-  streaming: false,
-  streamingContent: '',
-  abortController: null,
-  error: null,
+  isLoading: false,
+  isSending: false,
 
-  loadChat: async (chatId: string) => {
-    set({ loading: true, error: null })
-    try {
-      const chat = await getChat(chatId)
-      const messages = await getMessages(chatId)
-      set({ currentChat: chat || null, messages, loading: false })
-    } catch (error) {
-      set({ error: 'Не удалось загрузить чат', loading: false })
-    }
+  loadChats: async () => {
+    const chats = await db.chats.orderBy('updatedAt').reverse().toArray();
+    set({ chats });
   },
 
-  createNewChat: async (characterId: string): Promise<string> => {
-    const character = await getCharacter(characterId)
-    if (!character) throw new Error('Character not found')
-
-    const chatId = crypto.randomUUID()
-    const now = new Date().toISOString()
+  createChat: async (characterId) => {
     const chat: Chat = {
-      id: chatId,
+      id: nanoid(),
       characterId,
-      title: character.name,
-      createdAt: now,
-      updatedAt: now,
+      title: 'Новый чат',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       messageCount: 0,
       lastMessagePreview: '',
       isPinned: false
-    }
-
-    await createChat(chat)
-    set({ currentChat: chat, messages: [] })
-    return chatId
+    };
+    await db.chats.add(chat);
+    set({ chats: [chat, ...get().chats] });
+    return chat;
   },
 
-  sendMessage: async (chatId: string, characterId: string, content: string) => {
-    const { messages, currentChat } = get()
-    const { settings } = useAppStore.getState()
+  openChat: async (chatId) => {
+    const chat = get().chats.find(c => c.id === chatId);
+    if (!chat) return;
 
-    if (!settings.apiKey) {
-      set({ error: 'Введите API ключ в настройках' })
-      return
+    set({ isLoading: true });
+    const messages = await db.messages
+      .where('chatId')
+      .equals(chatId)
+      .sortBy('timestamp');
+
+    set({ currentChat: chat, messages, isLoading: false });
+  },
+
+  deleteChat: async (chatId) => {
+    await db.messages.where('chatId').equals(chatId).delete();
+    await db.chats.delete(chatId);
+    const current = get().currentChat;
+    if (current?.id === chatId) {
+      set({ currentChat: null, messages: [] });
     }
+    set({ chats: get().chats.filter(c => c.id !== chatId) });
+  },
 
-    const character = await getCharacter(characterId)
-    if (!character) return
+  renameChat: async (chatId, title) => {
+    await db.chats.update(chatId, { title });
+    set({
+      chats: get().chats.map(c => c.id === chatId ? { ...c, title } : c)
+    });
+  },
 
-    // Add user message
-    const userMessage: Message = {
-      id: crypto.randomUUID(),
-      chatId,
-      role: 'user',
-      content,
-      timestamp: new Date().toISOString()
-    }
+  togglePinChat: async (chatId) => {
+    const chat = get().chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const isPinned = !chat.isPinned;
+    await db.chats.update(chatId, { isPinned });
+    set({
+      chats: get().chats.map(c => c.id === chatId ? { ...c, isPinned } : c)
+        .sort((a, b) => {
+          if (a.isPinned && !b.isPinned) return -1;
+          if (!a.isPinned && b.isPinned) return 1;
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        })
+    });
+  },
 
-    const updatedMessages = [...messages, userMessage]
-    set({ messages: updatedMessages, error: null, streaming: true, streamingContent: '' })
+  addMessage: async (message) => {
+    await db.messages.add(message);
 
-    // Build context
-    const contextMessages = buildChatContext(
-      messages,
-      character.systemPrompt,
-      character.greeting,
-      content
-    )
-
-    // Select model based on complexity
-    const complexity = estimateComplexity(content)
-    const { model, maxTokens } = selectModel(complexity, settings.defaultModel)
-
-    // Create abort controller
-    const abortController = new AbortController()
-    set({ abortController })
-
-    try {
-      const response = await aiProvider.streamMessage(
-        contextMessages,
-        {
-          model,
-          temperature: character.temperature,
-          maxTokens,
-          systemPrompt: character.systemPrompt,
-          apiKey: settings.apiKey,
-          baseUrl: settings.apiBaseUrl,
-          signal: abortController.signal
-        },
-        (chunk) => {
-          set((state) => ({ streamingContent: state.streamingContent + chunk }))
-        }
-      )
-
-      // Save assistant message
-      const assistantMessage: Message = {
-        id: crypto.randomUUID(),
-        chatId,
-        role: 'assistant',
-        content: response.content,
-        timestamp: new Date().toISOString(),
-        mood: response.mood,
-        actions: response.actions
-      }
-
-      await addMessage(userMessage)
-      await addMessage(assistantMessage)
-
-      // Update chat metadata
-      const allMessages = [...updatedMessages, assistantMessage]
-      await updateChat(chatId, {
-        updatedAt: new Date().toISOString(),
-        messageCount: allMessages.length,
-        lastMessagePreview: response.content.substring(0, 100)
-      })
-
+    // Update chat metadata
+    const chatId = message.chatId;
+    const chat = get().chats.find(c => c.id === chatId);
+    if (chat) {
+      const updates = {
+        messageCount: chat.messageCount + 1,
+        lastMessagePreview: message.content.substring(0, 100),
+        updatedAt: new Date().toISOString()
+      };
+      await db.chats.update(chatId, updates);
       set({
-        messages: allMessages,
-        streaming: false,
-        streamingContent: '',
-        abortController: null
-      })
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
-        set({ streaming: false, streamingContent: '', abortController: null })
-        return
-      }
-      set({
-        error: error.message || 'Ошибка при отправке сообщения',
-        streaming: false,
-        streamingContent: '',
-        abortController: null
-      })
+        chats: get().chats.map(c => c.id === chatId ? { ...c, ...updates } : c)
+          .sort((a, b) => {
+            if (a.isPinned && !b.isPinned) return -1;
+            if (!a.isPinned && b.isPinned) return 1;
+            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+          })
+      });
+    }
+
+    // Add to current messages if this is the active chat
+    if (get().currentChat?.id === chatId) {
+      set({ messages: [...get().messages, message] });
     }
   },
 
-  stopStreaming: () => {
-    const { abortController } = get()
-    if (abortController) {
-      abortController.abort()
-    }
-  },
-
-  clearCurrentChat: () => {
-    set({ currentChat: null, messages: [], error: null, streaming: false, streamingContent: '' })
-  }
-}))
+  setCurrentChat: (chat) => set({ currentChat: chat }),
+  setMessages: (messages) => set({ messages })
+}));
