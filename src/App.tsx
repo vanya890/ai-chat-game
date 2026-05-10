@@ -1,46 +1,52 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
-import { Outlet } from 'react-router-dom'
-import { Layout } from './components/Layout'
-import { SeedData } from './components/SeedData'
-import { GalleryPage } from './pages/GalleryPage'
-import { ChatsPage } from './pages/ChatsPage'
-import { CharactersPage } from './pages/CharactersPage'
-import { ChatPage } from './pages/ChatPage'
-import { SettingsPage } from './pages/SettingsPage'
-import { useAppStore } from './stores/appStore'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useSettingsStore } from './stores/settingsStore';
+import { useCharacterStore } from './stores/characterStore';
+import { useChatStore } from './stores/chatStore';
+import Layout from './components/Layout';
+import Gallery from './pages/Gallery';
+import MyChats from './pages/MyChats';
+import Characters from './pages/Characters';
+import ChatPage from './pages/ChatPage';
+import Settings from './pages/Settings';
 
-function AppContent() {
-  const { initialized, init } = useAppStore()
+function App() {
+  const loadSettings = useSettingsStore(s => s.loadSettings);
+  const loadCharacters = useCharacterStore(s => s.loadCharacters);
+  const loadChats = useChatStore(s => s.loadChats);
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    init()
-  }, [init])
+    Promise.all([
+      loadSettings(),
+      loadCharacters(),
+      loadChats()
+    ]).then(() => setIsReady(true));
+  }, []);
 
-  if (!initialized) {
+  if (!isReady) {
     return (
       <div className="loading-screen">
-        <div className="loading-spinner"></div>
+        <div className="loading-spinner" />
         <p>Загрузка...</p>
       </div>
-    )
+    );
   }
 
   return (
-    <>
-      <SeedData />
+    <BrowserRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/gallery" replace />} />
-          <Route path="gallery" element={<GalleryPage />} />
-          <Route path="chats" element={<ChatsPage />} />
-          <Route path="characters" element={<CharactersPage />} />
+          <Route path="gallery" element={<Gallery />} />
+          <Route path="chats" element={<MyChats />} />
+          <Route path="characters" element={<Characters />} />
           <Route path="chat/:chatId" element={<ChatPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
-    </>
-  )
+    </BrowserRouter>
+  );
 }
 
-export default AppContent
+export default App;
