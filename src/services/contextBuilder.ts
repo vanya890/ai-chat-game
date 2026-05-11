@@ -41,7 +41,6 @@ export function buildChatContext(
   const recentMessages = messages.slice(-MAX_RECENT_MESSAGES);
   for (const msg of recentMessages) {
     if (msg.role === 'assistant') {
-      // Wrap assistant messages in JSON if they aren't already
       let content = msg.content;
       try {
         JSON.parse(content);
