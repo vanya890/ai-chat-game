@@ -1,134 +1,128 @@
-import { useEffect, useRef, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
-import { useNavigate } from 'react-router-dom'
-import { useChatStore } from '../stores/chatStore'
-import { getCharacter } from '../db'
-import type { Character, Message } from '../types'
-import { Send, StopCircle, ArrowLeft } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useChatStore } from '../stores/chatStore';
+import { useCharacterStore } from '../stores/characterStore';
+import { useAIStore } from '../stores/aiStore';
+import { ArrowLeft, Send, StopCircle } from 'lucide-react';
 
-export function ChatPage() {
-  const { chatId } = useParams()
-  const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const { currentChat, messages, loading, streaming, streamingContent, loadChat, createNewChat, sendMessage, stopStreaming, clearCurrentChat } = useChatStore()
-  const [input, setInput] = useState('')
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  const [character, setCharacter] = useState<Character | null>(null)
+export default function ChatPage() {
+  const { chatId } = useParams();
+  const navigate = useNavigate();
+  const currentChat = useChatStore(s => s.currentChat);
+  const messages = useChatStore(s => s.messages);
+  const openChat = useChatStore(s => s.openChat);
+  const addMessage = useChatStore(s => s.addMessage);
+  const characters = useCharacterStore(s => s.characters);
+  const sendMessage = useAIStore(s => s.sendMessage);
+  const isStreaming = useAIStore(s => s.isStreaming);
+  const stopStreaming = useAIStore(s => s.stopStreaming);
+  const error = useAIStore(s => s.error);
 
-  useEffect(() => {
-    const init = async () => {
-      if (chatId === 'new') {
-        const characterId = searchParams.get('character')
-        if (characterId) {
-          const char = await getCharacter(characterId)
-          if (char) {
-            setCharacter(char)
-            const newChatId = await createNewChat(characterId)
-            navigate(`/chat/${newChatId}`, { replace: true })
-          }
-        }
-      } else if (chatId) {
-        await loadChat(chatId)
-        if (useChatStore.getState().currentChat) {
-          const char = await getCharacter(useChatStore.getState().currentChat!.characterId)
-          setCharacter(char || null)
-        }
-      }
-    }
-    init()
-    return () => clearCurrentChat()
-  }, [chatId])
+  const [input, setInput] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const character = characters.find(c => c.id === currentChat?.characterId);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamingContent])
+    if (chatId) openChat(chatId);
+  }, [chatId]);
 
-  const handleSend = () => {
-    if (!input.trim() || !currentChat || streaming) return
-    sendMessage(currentChat.id, currentChat.characterId, input.trim())
-    setInput('')
-    inputRef.current?.focus()
-  }
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSend = useCallback(async () => {
+    if (!input.trim() || !character || isStreaming) return;
+    const text = input.trim();
+    setInput('');
+    await sendMessage(character, text);
+  }, [input, character, isStreaming, sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
+      e.preventDefault();
+      handleSend();
     }
-  }
+  };
 
-  const handleQuickAction = (payload: string) => {
-    if (!currentChat || streaming) return
-    sendMessage(currentChat.id, currentChat.characterId, payload)
-  }
+  const handleQuickAction = async (payload: string) => {
+    if (!character || isStreaming) return;
+    await sendMessage(character, payload);
+  };
 
-  const moodEmoji: Record<string, string> = {
-    neutral: '', happy: '😊', sad: '😢', angry: '😠',
-    surprised: '😲', thoughtful: '🤔', playful: '😏', serious: '🧐'
-  }
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 120) + 'px';
+    }
+  }, [input]);
 
-  if (!currentChat && chatId !== 'new') {
-    return <div className="loading-screen"><p>Чат не найден</p></div>
+  if (!currentChat) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-spinner" />
+        <p>Загрузка чата...</p>
+      </div>
+    );
   }
 
   return (
     <div className="chat-page">
-      <header className="chat-header">
+      <div className="chat-header">
         <button className="back-btn" onClick={() => navigate('/chats')}>
-          <ArrowLeft size={20} />
+          <ArrowLeft width={20} height={20} />
         </button>
         <div className="chat-header-info">
-          {character && (
-            <>
-              <div className="chat-avatar-small">
-                {character.avatar ? <img src={character.avatar} alt={character.name} /> : <div className="avatar-placeholder">{character.name[0]}</div>}
-              </div>
-              <h2>{character.name}</h2>
-            </>
-          )}
+          <h3>{character?.name || 'Чат'}</h3>
+          <span>{character?.description || ''}</span>
         </div>
-      </header>
+      </div>
+
+      {error && (
+        <div className="error-banner">
+          <span>{error}</span>
+          <button onClick={() => useAIStore.getState().clearError()}>×</button>
+        </div>
+      )}
 
       <div className="chat-messages">
-        {messages.map((msg: Message) => (
-          <div key={msg.id} className={`message ${msg.role}`}>
-            {msg.role === 'assistant' && (
+        {messages.map(msg => {
+          const parsedActions = msg.actions || [];
+          return (
+            <div key={msg.id} className={`message ${msg.role}`}>
               <div className="message-avatar">
-                {character?.avatar ? <img src={character.avatar} alt="" /> : <div className="avatar-placeholder">{character?.name?.[0] || '?'}</div>}
+                {msg.role === 'assistant' ? (character?.avatar || '🤖') : '👤'}
               </div>
-            )}
-            <div className="message-content">
-              <p>{msg.content}</p>
-              {msg.mood && <span className="mood-indicator">{moodEmoji[msg.mood]}</span>}
-              {msg.actions && msg.actions.length > 0 && (
-                <div className="quick-actions">
-                  {msg.actions.map((action, i) => (
-                    <button key={i} className="action-btn" onClick={() => handleQuickAction(action.payload)}>
-                      {action.label}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="message-bubble">
+                {msg.content}
+                {parsedActions.length > 0 && (
+                  <div className="message-actions-bar">
+                    {parsedActions.map((action, i) => (
+                      <button
+                        key={i}
+                        className="quick-action-btn"
+                        onClick={() => handleQuickAction(action.payload)}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
-        {streaming && streamingContent && (
-          <div className="message assistant streaming">
-            <div className="message-avatar">
-              {character?.avatar ? <img src={character.avatar} alt="" /> : <div className="avatar-placeholder">{character?.name?.[0] || '?'}</div>}
+        {isStreaming && (
+          <div className="message assistant">
+            <div className="message-avatar">{character?.avatar || '🤖'}</div>
+            <div className="typing-indicator">
+              <div className="typing-dot" />
+              <div className="typing-dot" />
+              <div className="typing-dot" />
             </div>
-            <div className="message-content">
-              <p>{streamingContent}<span className="cursor">|</span></p>
-            </div>
-          </div>
-        )}
-
-        {streaming && !streamingContent && (
-          <div className="typing-indicator">
-            <span>{character?.name} думает</span>
-            <div className="dots"><span></span><span></span><span></span></div>
           </div>
         )}
 
@@ -137,24 +131,25 @@ export function ChatPage() {
 
       <div className="chat-input-area">
         <textarea
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
+          ref={textareaRef}
+          className="chat-input"
           placeholder="Напишите сообщение..."
-          disabled={streaming}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={isStreaming}
           rows={1}
         />
-        {streaming ? (
+        {isStreaming ? (
           <button className="stop-btn" onClick={stopStreaming}>
-            <StopCircle size={20} />
+            <StopCircle width={20} height={20} />
           </button>
         ) : (
           <button className="send-btn" onClick={handleSend} disabled={!input.trim()}>
-            <Send size={20} />
+            <Send width={20} height={20} />
           </button>
         )}
       </div>
     </div>
-  )
+  );
 }
