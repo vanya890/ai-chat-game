@@ -6,6 +6,8 @@ import { useChatStore } from './chatStore';
 import { useSettingsStore } from './settingsStore';
 import { db } from '../db';
 
+const MAX_RECENT_MESSAGES = 10;
+
 interface AIState {
   isStreaming: boolean;
   abortController: AbortController | null;
@@ -13,6 +15,7 @@ interface AIState {
   sendMessage: (character: Character, text: string) => Promise<void>;
   stopStreaming: () => void;
   clearError: () => void;
+  generateCharacter: (description: string) => Promise<Partial<Character>>;
 }
 
 export const useAIStore = create<AIState>((set, get) => ({
@@ -31,13 +34,11 @@ export const useAIStore = create<AIState>((set, get) => ({
     const chatStore = useChatStore.getState();
     let chat = chatStore.currentChat;
 
-    // Create chat if none exists
     if (!chat) {
       chat = await chatStore.createChat(character.id);
       await chatStore.openChat(chat.id);
     }
 
-    // Add user message
     const userMessage: Message = {
       id: crypto.randomUUID(),
       chatId: chat.id,
@@ -47,28 +48,25 @@ export const useAIStore = create<AIState>((set, get) => ({
     };
     await chatStore.addMessage(userMessage);
 
-    // Build context
     const messages = chatStore.messages;
     let summary: ChatSummary | undefined;
 
     if (needsSummary(messages.length)) {
       try {
         const provider = new OpenAIProvider(settings.apiKey);
-        summary = await provider.summarizeConversation(messages.slice(0, -MAX_RECENT_MESSAGES));
-        // Save summary to DB for future use
-        await db.cache.put({ key: `summary:${chat.id}`, value: summary, expiresAt: Date.now() + 86400000 });
+        const oldMessages = messages.slice(0, -MAX_RECENT_MESSAGES);
+        summary = await provider.summarizeConversation(oldMessages);
+        await db.cache.put({ key: `summary:${chat.id}`, value: summary, expiresAt: Date.now() + 86400000 } as any);
       } catch {
-        // Summary failed, continue without it
+        // Continue without summary
       }
     }
 
     const contextMessages = buildChatContext(character, messages, text, summary);
 
-    // Start streaming
     const abortController = new AbortController();
     set({ isStreaming: true, abortController, error: null });
 
-    // Create placeholder for assistant message
     const assistantMessageId = crypto.randomUUID();
     let streamedContent = '';
 
@@ -80,7 +78,6 @@ export const useAIStore = create<AIState>((set, get) => ({
         character,
         (chunk) => {
           streamedContent += chunk;
-          // Update UI in real-time
           chatStore.setMessages([
             ...chatStore.messages,
             {
@@ -95,7 +92,6 @@ export const useAIStore = create<AIState>((set, get) => ({
         abortController.signal
       );
 
-      // Save final message
       const assistantMessage: Message = {
         id: assistantMessageId,
         chatId: chat.id,
@@ -103,21 +99,18 @@ export const useAIStore = create<AIState>((set, get) => ({
         content: response.content,
         timestamp: new Date().toISOString(),
         mood: response.mood,
-        actions: response.actions,
-        metadata: response.metadata
+        actions: response.actions
       };
       await chatStore.addMessage(assistantMessage);
     } catch (error: any) {
       if (error.name === 'AbortError') {
-        // User cancelled — save partial response
         if (streamedContent) {
           await chatStore.addMessage({
             id: assistantMessageId,
             chatId: chat.id,
             role: 'assistant',
             content: streamedContent,
-            timestamp: new Date().toISOString(),
-            done: false
+            timestamp: new Date().toISOString()
           } as Message);
         }
       } else {
@@ -135,5 +128,13 @@ export const useAIStore = create<AIState>((set, get) => ({
     }
   },
 
-  clearError: () => set({ error: null })
+  clearError: () => set({ error: null }),
+
+  generateCharacter: async (description: string) => {
+    const settings = useSettingsStore.getState().settings;
+    if (!settings.apiKey) throw new Error('No API key');
+
+    const provider = new OpenAIProvider(settings.apiKey);
+    return provider.generateCharacter(description);
+  }
 }));
