@@ -1,5 +1,5 @@
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useSettingsStore } from './stores/settingsStore';
 import { useCharacterStore } from './stores/characterStore';
 import { useChatStore } from './stores/chatStore';
@@ -10,7 +10,7 @@ import Characters from './pages/Characters';
 import ChatPage from './pages/ChatPage';
 import Settings from './pages/Settings';
 
-function App() {
+function AppShell() {
   const loadSettings = useSettingsStore(s => s.loadSettings);
   const loadCharacters = useCharacterStore(s => s.loadCharacters);
   const loadChats = useChatStore(s => s.loadChats);
@@ -49,4 +49,4 @@ function App() {
   );
 }
 
-export default App;
+export default AppShell;
