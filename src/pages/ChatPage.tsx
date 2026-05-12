@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useChatStore } from '../stores/chatStore';
 import { useCharacterStore } from '../stores/characterStore';
 import { useAIStore } from '../stores/aiStore';
-import { ArrowLeft, Send, StopCircle } from 'lucide-react';
+import { ArrowLeft, Send, StopCircle, Image } from 'lucide-react';
 
 export default function ChatPage() {
   const { chatId } = useParams();
@@ -51,7 +51,6 @@ export default function ChatPage() {
     await sendMessage(character, payload);
   };
 
-  // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -93,10 +92,13 @@ export default function ChatPage() {
           return (
             <div key={msg.id} className={`message ${msg.role}`}>
               <div className="message-avatar">
-                {msg.role === 'assistant' ? (character?.avatar || '🤖') : '👤'}
+                {msg.role === 'assistant' ? renderAvatar(character) : '👤'}
               </div>
               <div className="message-bubble">
-                {msg.content}
+                {msg.imageUrl && (
+                  <img src={msg.imageUrl} alt="Generated" className="message-image" />
+                )}
+                {msg.content && <span>{msg.content}</span>}
                 {parsedActions.length > 0 && (
                   <div className="message-actions-bar">
                     {parsedActions.map((action, i) => (
@@ -152,4 +154,12 @@ export default function ChatPage() {
       </div>
     </div>
   );
+}
+
+function renderAvatar(character?: { avatar?: string; avatarType?: string }) {
+  if (!character?.avatar) return '🤖';
+  if (character.avatarType === 'url' || character.avatarType === 'generated') {
+    return <img src={character.avatar} alt="" className="avatar-image" />;
+  }
+  return character.avatar;
 }
