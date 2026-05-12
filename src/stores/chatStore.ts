@@ -1,42 +1,35 @@
 import { create } from 'zustand';
 import type { Chat, Message } from '../types';
 import { db } from '../db';
-import { nanoid } from 'nanoid';
 
 interface ChatState {
   chats: Chat[];
-  currentChat: Chat | null;
   messages: Message[];
-  isLoading: boolean;
-  isSending: boolean;
+  currentChat: Chat | null;
   loadChats: () => Promise<void>;
   createChat: (characterId: string) => Promise<Chat>;
   openChat: (chatId: string) => Promise<void>;
-  deleteChat: (chatId: string) => Promise<void>;
-  renameChat: (chatId: string, title: string) => Promise<void>;
-  togglePinChat: (chatId: string) => Promise<void>;
   addMessage: (message: Message) => Promise<void>;
-  setCurrentChat: (chat: Chat | null) => void;
   setMessages: (messages: Message[]) => void;
+  deleteChat: (chatId: string) => Promise<void>;
+  pinChat: (chatId: string) => Promise<void>;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   chats: [],
-  currentChat: null,
   messages: [],
-  isLoading: false,
-  isSending: false,
+  currentChat: null,
 
   loadChats: async () => {
     const chats = await db.chats.orderBy('updatedAt').reverse().toArray();
     set({ chats });
   },
 
-  createChat: async (characterId) => {
+  createChat: async (characterId: string) => {
     const chat: Chat = {
-      id: nanoid(),
+      id: crypto.randomUUID(),
       characterId,
-      title: 'Новый чат',
+      title: `Чат с персонажем`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       messageCount: 0,
@@ -48,80 +41,55 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return chat;
   },
 
-  openChat: async (chatId) => {
-    const chat = get().chats.find(c => c.id === chatId);
+  openChat: async (chatId: string) => {
+    const chat = await db.chats.get(chatId);
     if (!chat) return;
-
-    set({ isLoading: true });
-    const messages = await db.messages
-      .where('chatId')
-      .equals(chatId)
-      .sortBy('timestamp');
-
-    set({ currentChat: chat, messages, isLoading: false });
+    const messages = await db.messages.where('chatId').equals(chatId).sortBy('timestamp');
+    set({ currentChat: chat, messages });
   },
 
-  deleteChat: async (chatId) => {
+  addMessage: async (message: Message) => {
+    await db.messages.add(message);
+    const messages = [...get().messages, message];
+    const currentChat = get().currentChat;
+
+    if (currentChat) {
+      const updatedChat = {
+        ...currentChat,
+        messageCount: currentChat.messageCount + 1,
+        lastMessagePreview: message.content.slice(0, 100),
+        updatedAt: message.timestamp
+      };
+      await db.chats.update(currentChat.id, {
+        messageCount: updatedChat.messageCount,
+        lastMessagePreview: updatedChat.lastMessagePreview,
+        updatedAt: updatedChat.updatedAt
+      });
+      set({ messages, currentChat: updatedChat });
+    } else {
+      set({ messages });
+    }
+  },
+
+  setMessages: (messages: Message[]) => {
+    set({ messages });
+  },
+
+  deleteChat: async (chatId: string) => {
     await db.messages.where('chatId').equals(chatId).delete();
     await db.chats.delete(chatId);
-    const current = get().currentChat;
-    if (current?.id === chatId) {
-      set({ currentChat: null, messages: [] });
-    }
-    set({ chats: get().chats.filter(c => c.id !== chatId) });
-  },
-
-  renameChat: async (chatId, title) => {
-    await db.chats.update(chatId, { title });
     set({
-      chats: get().chats.map(c => c.id === chatId ? { ...c, title } : c)
+      chats: get().chats.filter(c => c.id !== chatId),
+      currentChat: get().currentChat?.id === chatId ? null : get().currentChat,
+      messages: get().currentChat?.id === chatId ? [] : get().messages
     });
   },
 
-  togglePinChat: async (chatId) => {
+  pinChat: async (chatId: string) => {
     const chat = get().chats.find(c => c.id === chatId);
     if (!chat) return;
-    const isPinned = !chat.isPinned;
-    await db.chats.update(chatId, { isPinned });
-    set({
-      chats: get().chats.map(c => c.id === chatId ? { ...c, isPinned } : c)
-        .sort((a, b) => {
-          if (a.isPinned && !b.isPinned) return -1;
-          if (!a.isPinned && b.isPinned) return 1;
-          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-        })
-    });
-  },
-
-  addMessage: async (message) => {
-    await db.messages.add(message);
-
-    // Update chat metadata
-    const chatId = message.chatId;
-    const chat = get().chats.find(c => c.id === chatId);
-    if (chat) {
-      const updates = {
-        messageCount: chat.messageCount + 1,
-        lastMessagePreview: message.content.substring(0, 100),
-        updatedAt: new Date().toISOString()
-      };
-      await db.chats.update(chatId, updates);
-      set({
-        chats: get().chats.map(c => c.id === chatId ? { ...c, ...updates } : c)
-          .sort((a, b) => {
-            if (a.isPinned && !b.isPinned) return -1;
-            if (!a.isPinned && b.isPinned) return 1;
-            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-          })
-      });
-    }
-
-    // Add to current messages if this is the active chat
-    if (get().currentChat?.id === chatId) {
-      set({ messages: [...get().messages, message] });
-    }
-  },
-
-  setCurrentChat: (chat) => set({ currentChat: chat }),
-  setMessages: (messages) => set({ messages })
+    const updated = { ...chat, isPinned: !chat.isPinned };
+    await db.chats.update(chatId, { isPinned: updated.isPinned });
+    set({ chats: get().chats.map(c => c.id === chatId ? updated : c) });
+  }
 }));
