@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCharacterStore } from '../stores/characterStore';
-import { useSettingsStore } from '../stores/settingsStore';
 import { useAIStore } from '../stores/aiStore';
+import { Plus, Edit2, Trash2, Wand2, Image } from 'lucide-react';
+import { ImageProvider } from '../services/imageProvider';
+import { useSettingsStore } from '../stores/settingsStore';
 import type { Character } from '../types';
-import { Plus, Sparkles, Trash2, Edit2 } from 'lucide-react';
 
 export default function Characters() {
   const navigate = useNavigate();
@@ -12,235 +13,243 @@ export default function Characters() {
   const addCharacter = useCharacterStore(s => s.addCharacter);
   const updateCharacter = useCharacterStore(s => s.updateCharacter);
   const deleteCharacter = useCharacterStore(s => s.deleteCharacter);
-  const apiKey = useSettingsStore(s => s.settings.apiKey);
   const generateCharacter = useAIStore(s => s.generateCharacter);
+  const settings = useSettingsStore(s => s.settings);
 
-  const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Character | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [formData, setFormData] = useState<Partial<Character>>({
+  const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+
+  const emptyChar: Character = {
+    id: '',
     name: '',
+    avatar: '🤖',
+    avatarType: 'emoji',
     description: '',
     personality: '',
     systemPrompt: '',
     greeting: '',
-    tags: [],
-    temperature: 0.7,
+    aiProvider: 'openai',
+    customApiUrl: '',
+    model: settings.defaultModel || 'gpt-4o-mini',
+    temperature: settings.defaultTemperature || 0.7,
     maxTokens: 300,
-    model: 'gpt-4o-mini',
-    avatar: '🤖'
-  });
-
-  const [tagsInput, setTagsInput] = useState('');
-
-  const resetForm = () => {
-    setFormData({
-      name: '', description: '', personality: '', systemPrompt: '',
-      greeting: '', tags: [], temperature: 0.7, maxTokens: 300,
-      model: 'gpt-4o-mini', avatar: '🤖'
-    });
-    setTagsInput('');
-    setShowForm(false);
-    setEditingId(null);
+    tags: [],
+    isUserCreated: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
-  const startEdit = (char: Character) => {
-    setFormData(char);
-    setTagsInput(char.tags.join(', '));
-    setEditingId(char.id);
-    setShowForm(true);
+  const [form, setForm] = useState<Character>(emptyChar);
+
+  const handleGenerate = async () => {
+    if (!aiPrompt.trim()) return;
+    setIsGenerating(true);
+    try {
+      const generated = await generateCharacter(aiPrompt);
+      setForm({
+        ...emptyChar,
+        ...generated,
+        id: crypto.randomUUID(),
+        isUserCreated: true
+      });
+      setShowForm(true);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleGenerateAvatar = async () => {
+    if (!form.name) return;
+    setIsGeneratingAvatar(true);
+    try {
+      const imgProvider = new ImageProvider(settings);
+      const result = await imgProvider.generateAvatar(form.description || form.name);
+      setForm({ ...form, avatar: result.imageUrl, avatarType: 'generated' });
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setIsGeneratingAvatar(false);
+    }
   };
 
   const handleSave = async () => {
-    if (!formData.name || !formData.systemPrompt) return;
-
-    const tags = tagsInput.split(',').map(t => t.trim()).filter(Boolean);
-    const character: Character = {
-      id: editingId || crypto.randomUUID(),
-      name: formData.name || '',
-      avatar: formData.avatar || '🤖',
-      description: formData.description || '',
-      personality: formData.personality || '',
-      systemPrompt: formData.systemPrompt || '',
-      greeting: formData.greeting || 'Привет!',
-      aiProvider: 'openai',
-      model: formData.model || 'gpt-4o-mini',
-      temperature: formData.temperature ?? 0.7,
-      maxTokens: formData.maxTokens ?? 300,
-      tags,
-      isUserCreated: true,
-      createdAt: editingId ? characters.find(c => c.id === editingId)?.createdAt || new Date().toISOString() : new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    if (editingId) {
-      await updateCharacter(editingId, character);
-    } else {
-      await addCharacter(character);
+    if (!form.name || !form.systemPrompt) {
+      alert('Имя и системный промпт обязательны');
+      return;
     }
-    resetForm();
+    const now = new Date().toISOString();
+    const char = { ...form, updatedAt: now, createdAt: form.id ? form.createdAt : now };
+    if (editing) {
+      await updateCharacter(form.id, char);
+    } else {
+      char.id = crypto.randomUUID();
+      await addCharacter(char);
+    }
+    setEditing(null);
+    setShowForm(false);
+    setForm(emptyChar);
   };
 
-  const handleAIGenerate = async () => {
-    if (!aiPrompt || !apiKey) return;
-    setIsGenerating(true);
-    try {
-      // Use OpenAI directly
-      const response = await fetch(`${import.meta.env.VITE_OPENAI_BASE_URL || 'https://api.openai.com/v1'}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: `Create a character. Return JSON with: name, description, personality, systemPrompt (concise, 80-120 tokens), greeting, tags (array), temperature (0.3-0.9), maxTokens (200-500). Respond in Russian.`
-            },
-            { role: 'user', content: aiPrompt }
-          ],
-          max_tokens: 600,
-          temperature: 0.8,
-          response_format: { type: 'json_object' }
-        })
-      });
-      const data = await response.json();
-      const parsed = JSON.parse(data.choices[0].message.content);
-      
-      setFormData({
-        name: parsed.name,
-        description: parsed.description,
-        personality: parsed.personality,
-        systemPrompt: parsed.systemPrompt,
-        greeting: parsed.greeting,
-        tags: parsed.tags || [],
-        temperature: parsed.temperature ?? 0.7,
-        maxTokens: parsed.maxTokens ?? 300,
-        model: 'gpt-4o-mini',
-        avatar: '🤖'
-      });
-      setTagsInput((parsed.tags || []).join(', '));
-      setShowForm(true);
-    } catch (error) {
-      console.error('AI generation failed:', error);
-    } finally {
-      setIsGenerating(false);
-      setAiPrompt('');
-    }
+  const handleEdit = (char: Character) => {
+    setEditing(char);
+    setForm(char);
+    setShowForm(true);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Удалить персонажа?')) return;
+    await deleteCharacter(id);
   };
 
   return (
-    <div className="character-editor">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+    <div className="characters-page">
+      <div className="page-header">
         <h2>Персонажи</h2>
-        <button className="btn btn-primary" onClick={() => { resetForm(); setShowForm(true); }}>
-          <Plus width={16} height={16} /> Создать
+        <button className="btn-create" onClick={() => { setEditing(null); setForm(emptyChar); setShowForm(true); }}>
+          <Plus width={18} /> Создать
         </button>
       </div>
 
       {/* AI Generation */}
-      <div className="settings-group" style={{ marginBottom: 16 }}>
-        <h3>✨ Создать с помощью ИИ</h3>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
-            className="search-bar"
-            placeholder="Опиши персонажа: 'Саркастичный кот, который даёт жизненные советы'"
-            value={aiPrompt}
-            onChange={e => setAiPrompt(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button
-            className="btn btn-ai"
-            disabled={!aiPrompt || !apiKey || isGenerating}
-            onClick={handleAIGenerate}
-          >
-            <Sparkles width={16} height={16} />
-            {isGenerating ? '...' : 'Создать'}
-          </button>
-        </div>
+      <div className="ai-generate-section">
+        <Wand2 width={20} />
+        <input
+          value={aiPrompt}
+          onChange={e => setAiPrompt(e.target.value)}
+          placeholder="Опишите персонажа: 'Саркастичный кот, даёт советы'"
+          onKeyDown={e => e.key === 'Enter' && handleGenerate()}
+        />
+        <button onClick={handleGenerate} disabled={isGenerating}>
+          {isGenerating ? 'Генерация...' : 'Создать с AI'}
+        </button>
       </div>
 
-      {/* Character Form */}
+      {/* Form */}
       {showForm && (
-        <div className="settings-group editor-form">
-          <h3>{editingId ? 'Редактировать' : 'Новый персонаж'}</h3>
-          <div className="form-group">
-            <label>Имя *</label>
-            <input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} />
+        <div className="character-form">
+          <h3>{editing ? 'Редактировать' : 'Новый персонаж'}</h3>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Имя *</label>
+              <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+            </div>
+            <div className="form-group avatar-group">
+              <label>Аватар</label>
+              <div className="avatar-preview">
+                {form.avatarType === 'url' || form.avatarType === 'generated'
+                  ? <img src={form.avatar} alt="" className="avatar-image" />
+                  : <span className="avatar-emoji">{form.avatar}</span>}
+              </div>
+              <input
+                value={form.avatar}
+                onChange={e => setForm({...form, avatar: e.target.value, avatarType: e.target.value.startsWith('http') ? 'url' : 'emoji'})}
+                placeholder="Emoji или URL"
+              />
+              <button onClick={handleGenerateAvatar} disabled={isGeneratingAvatar} className="btn-avatar-gen">
+                <Image width={14} /> {isGeneratingAvatar ? '...' : 'AI аватар'}
+              </button>
+            </div>
           </div>
-          <div className="form-group">
-            <label>Аватар (эмодзи)</label>
-            <input value={formData.avatar || ''} onChange={e => setFormData({ ...formData, avatar: e.target.value })} placeholder="🤖" />
-          </div>
+
           <div className="form-group">
             <label>Описание</label>
-            <input value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
+            <input value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
           </div>
-          <div className="form-group">
-            <label>Характер (traits)</label>
-            <input value={formData.personality || ''} onChange={e => setFormData({ ...formData, personality: e.target.value })} placeholder="analytical, observant, dry humor" />
-          </div>
-          <div className="form-group">
-            <label>System Prompt *</label>
-            <textarea value={formData.systemPrompt || ''} onChange={e => setFormData({ ...formData, systemPrompt: e.target.value })} placeholder="You are... Keep responses concise." />
-          </div>
+
           <div className="form-group">
             <label>Приветствие</label>
-            <textarea value={formData.greeting || ''} onChange={e => setFormData({ ...formData, greeting: e.target.value })} placeholder="Привет!" style={{ minHeight: 60 }} />
+            <textarea value={form.greeting} onChange={e => setForm({...form, greeting: e.target.value})} rows={2} />
           </div>
+
+          <div className="form-group">
+            <label>Системный промпт *</label>
+            <textarea value={form.systemPrompt} onChange={e => setForm({...form, systemPrompt: e.target.value})} rows={4} />
+          </div>
+
+          <div className="form-group">
+            <label>Личность (через запятую)</label>
+            <input value={form.personality} onChange={e => setForm({...form, personality: e.target.value})} />
+          </div>
+
           <div className="form-group">
             <label>Теги (через запятую)</label>
-            <input value={tagsInput} onChange={e => setTagsInput(e.target.value)} placeholder="detective, mystery, logic" />
+            <input value={form.tags.join(', ')} onChange={e => setForm({...form, tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean)})} />
           </div>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <div className="form-group" style={{ flex: 1 }}>
-              <label>Модель</label>
-              <select value={formData.model || 'gpt-4o-mini'} onChange={e => setFormData({ ...formData, model: e.target.value })}>
-                <option value="gpt-4o-mini">gpt-4o-mini</option>
-                <option value="gpt-4o">gpt-4o</option>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Провайдер</label>
+              <select value={form.aiProvider} onChange={e => setForm({...form, aiProvider: e.target.value as any})}>
+                <option value="openai">OpenAI</option>
+                <option value="openai-compatible">OpenAI Compatible</option>
+                <option value="local">Локальная модель</option>
               </select>
             </div>
-            <div className="form-group" style={{ flex: 1 }}>
-              <label>Температура</label>
-              <input type="number" min="0" max="1" step="0.1" value={formData.temperature ?? 0.7} onChange={e => setFormData({ ...formData, temperature: parseFloat(e.target.value) })} />
-            </div>
-            <div className="form-group" style={{ flex: 1 }}>
-              <label>Max токенов</label>
-              <input type="number" min="50" max="2000" step="50" value={formData.maxTokens ?? 300} onChange={e => setFormData({ ...formData, maxTokens: parseInt(e.target.value) })} />
+            <div className="form-group">
+              <label>Модель</label>
+              <input value={form.model} onChange={e => setForm({...form, model: e.target.value})} />
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-primary" onClick={handleSave}>Сохранить</button>
-            <button className="btn btn-secondary" onClick={resetForm}>Отмена</button>
+
+          {(form.aiProvider === 'openai-compatible' || form.aiProvider === 'local') && (
+            <div className="form-group">
+              <label>Custom API URL</label>
+              <input value={form.customApiUrl} onChange={e => setForm({...form, customApiUrl: e.target.value})} placeholder="http://localhost:11434/v1" />
+            </div>
+          )}
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Температура: {form.temperature}</label>
+              <input type="range" min="0" max="1" step="0.1" value={form.temperature} onChange={e => setForm({...form, temperature: parseFloat(e.target.value)})} />
+            </div>
+            <div className="form-group">
+              <label>Макс токенов: {form.maxTokens}</label>
+              <input type="range" min="100" max="1000" step="50" value={form.maxTokens} onChange={e => setForm({...form, maxTokens: parseInt(e.target.value)})} />
+            </div>
+          </div>
+
+          <div className="form-actions">
+            <button className="btn-save" onClick={handleSave}>Сохранить</button>
+            <button className="btn-cancel" onClick={() => { setShowForm(false); setEditing(null); }}>Отмена</button>
           </div>
         </div>
       )}
 
       {/* Character List */}
-      <div className="chat-list">
+      <div className="character-list">
         {characters.map(char => (
-          <div key={char.id} className="chat-list-item">
-            <div className="chat-list-avatar">{char.avatar}</div>
-            <div className="chat-list-info">
-              <h4>{char.name} {char.isUserCreated && <span style={{ fontSize: 11, color: 'var(--accent)' }}>(свой)</span>}</h4>
+          <div key={char.id} className="character-list-item">
+            <div className="item-avatar">
+              {renderAvatar(char)}
+            </div>
+            <div className="item-info">
+              <h4>{char.name}</h4>
               <p>{char.description}</p>
             </div>
             {char.isUserCreated && (
-              <>
-                <button className="chat-list-delete" style={{ opacity: 1 }} onClick={() => startEdit(char)}>
-                  <Edit2 width={16} height={16} />
-                </button>
-                <button className="chat-list-delete" style={{ opacity: 1 }} onClick={() => { if (confirm('Удалить персонажа?')) deleteCharacter(char.id); }}>
-                  <Trash2 width={16} height={16} />
-                </button>
-              </>
+              <div className="item-actions">
+                <button onClick={() => handleEdit(char)}><Edit2 width={16} /></button>
+                <button onClick={() => handleDelete(char.id)}><Trash2 width={16} /></button>
+              </div>
             )}
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+function renderAvatar(character: { avatar?: string; avatarType?: string; name?: string }) {
+  if (!character?.avatar) return '🤖';
+  if (character.avatarType === 'url' || character.avatarType === 'generated') {
+    return <img src={character.avatar} alt={character.name} className="avatar-image" />;
+  }
+  return <span className="avatar-emoji">{character.avatar}</span>;
 }
