@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import type { AIResponse, Character, Message, ChatSummary } from '../types';
-import { OpenAIProvider, AIResponseSchema } from '../services/aiProvider';
+import { OpenAIProvider, AI_RESPONSE_SCHEMA } from '../services/aiProvider';
 import { buildChatContext, needsSummary } from '../services/contextBuilder';
 import { useChatStore } from './chatStore';
 import { useSettingsStore } from './settingsStore';
+import { useTokenStore } from './tokenStore';
 import { db } from '../db';
 
 const MAX_RECENT_MESSAGES = 10;
@@ -18,19 +19,27 @@ interface AIState {
   generateCharacter: (description: string) => Promise<Partial<Character>>;
 }
 
+function getProvider(character: Character) {
+  const settings = useSettingsStore.getState().settings;
+
+  if (character.aiProvider === 'openai-compatible' || character.aiProvider === 'local') {
+    const url = character.customApiUrl || settings.customApiUrl;
+    const key = settings.customApiKey;
+    if (!url || !key) throw new Error('Custom API URL or key not configured in Settings');
+    return new OpenAIProvider(key, url);
+  }
+
+  // Default: openai
+  if (!settings.apiKey) throw new Error('OpenAI API key not configured. Go to Settings.');
+  return new OpenAIProvider(settings.apiKey);
+}
+
 export const useAIStore = create<AIState>((set, get) => ({
   isStreaming: false,
   abortController: null,
   error: null,
 
   sendMessage: async (character: Character, text: string) => {
-    const settings = useSettingsStore.getState().settings;
-
-    if (!settings.apiKey) {
-      set({ error: 'Введите API ключ в настройках' });
-      return;
-    }
-
     const chatStore = useChatStore.getState();
     let chat = chatStore.currentChat;
 
@@ -53,7 +62,7 @@ export const useAIStore = create<AIState>((set, get) => ({
 
     if (needsSummary(messages.length)) {
       try {
-        const provider = new OpenAIProvider(settings.apiKey);
+        const provider = getProvider(character);
         const oldMessages = messages.slice(0, -MAX_RECENT_MESSAGES);
         summary = await provider.summarizeConversation(oldMessages);
         await db.cache.put({ key: `summary:${chat.id}`, value: summary, expiresAt: Date.now() + 86400000 } as any);
@@ -70,9 +79,8 @@ export const useAIStore = create<AIState>((set, get) => ({
     const assistantMessageId = crypto.randomUUID();
     let streamedContent = '';
 
-    const provider = new OpenAIProvider(settings.apiKey);
-
     try {
+      const provider = getProvider(character);
       const response = await provider.sendMessage(
         contextMessages,
         character,
@@ -99,9 +107,24 @@ export const useAIStore = create<AIState>((set, get) => ({
         content: response.content,
         timestamp: new Date().toISOString(),
         mood: response.mood,
-        actions: response.actions
+        actions: response.actions,
+        tokenCount: response.tokenUsage?.total
       };
       await chatStore.addMessage(assistantMessage);
+
+      // Track tokens
+      if (response.tokenUsage) {
+        await useTokenStore.getState().addUsage({
+          chatId: chat.id,
+          characterId: character.id,
+          model: character.model,
+          promptTokens: response.tokenUsage.prompt,
+          completionTokens: response.tokenUsage.completion,
+          totalTokens: response.tokenUsage.total,
+          timestamp: new Date().toISOString(),
+          date: new Date().toISOString().slice(0, 10)
+        });
+      }
     } catch (error: any) {
       if (error.name === 'AbortError') {
         if (streamedContent) {
@@ -123,9 +146,7 @@ export const useAIStore = create<AIState>((set, get) => ({
 
   stopStreaming: () => {
     const { abortController } = get();
-    if (abortController) {
-      abortController.abort();
-    }
+    if (abortController) abortController.abort();
   },
 
   clearError: () => set({ error: null }),
@@ -133,7 +154,6 @@ export const useAIStore = create<AIState>((set, get) => ({
   generateCharacter: async (description: string) => {
     const settings = useSettingsStore.getState().settings;
     if (!settings.apiKey) throw new Error('No API key');
-
     const provider = new OpenAIProvider(settings.apiKey);
     return provider.generateCharacter(description);
   }
