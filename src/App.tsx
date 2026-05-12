@@ -9,6 +9,7 @@ import MyChats from './pages/MyChats';
 import Characters from './pages/Characters';
 import ChatPage from './pages/ChatPage';
 import Settings from './pages/Settings';
+import TokenDashboard from './pages/TokenDashboard';
 
 function AppShell() {
   const loadSettings = useSettingsStore(s => s.loadSettings);
@@ -22,6 +23,11 @@ function AppShell() {
       loadCharacters(),
       loadChats()
     ]).then(() => setIsReady(true));
+  }, []);
+
+  useEffect(() => {
+    const theme = useSettingsStore.getState().settings.theme;
+    document.documentElement.setAttribute('data-theme', theme);
   }, []);
 
   if (!isReady) {
@@ -43,6 +49,7 @@ function AppShell() {
           <Route path="characters" element={<Characters />} />
           <Route path="chat/:chatId" element={<ChatPage />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="tokens" element={<TokenDashboard />} />
         </Route>
       </Routes>
     </BrowserRouter>
