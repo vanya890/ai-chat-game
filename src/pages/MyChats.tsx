@@ -1,77 +1,89 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChatStore } from '../stores/chatStore';
 import { useCharacterStore } from '../stores/characterStore';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Pin } from 'lucide-react';
 
 export default function MyChats() {
   const navigate = useNavigate();
   const chats = useChatStore(s => s.chats);
-  const characters = useCharacterStore(s => s.characters);
+  const loadChats = useChatStore(s => s.loadChats);
   const deleteChat = useChatStore(s => s.deleteChat);
+  const pinChat = useChatStore(s => s.pinChat);
+  const characters = useCharacterStore(s => s.characters);
 
-  const getCharacter = (characterId: string) => {
-    return characters.find(c => c.id === characterId);
-  };
+  useEffect(() => {
+    loadChats();
+  }, []);
+
+  const sorted = [...chats].sort((a, b) => {
+    if (a.isPinned && !b.isPinned) return -1;
+    if (!a.isPinned && b.isPinned) return 1;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  const getChar = (charId: string) => characters.find(c => c.id === charId);
 
   const formatTime = (iso: string) => {
-    const date = new Date(iso);
+    const d = new Date(iso);
     const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (minutes < 1) return 'только что';
-    if (minutes < 60) return `${minutes} мин назад`;
-    if (hours < 24) return `${hours} ч назад`;
-    if (days < 7) return `${days} дн назад`;
-    return date.toLocaleDateString('ru-RU');
+    const diff = now.getTime() - d.getTime();
+    if (diff < 60000) return 'только что';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)} мин назад`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)} ч назад`;
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
   };
 
-  if (chats.length === 0) {
-    return (
-      <div className="my-chats">
-        <h2>Мои чаты</h2>
-        <div className="empty-state">
-          <p>Пока нет чатов. Начни разговор в галерее!</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="my-chats">
+    <div className="my-chats-page">
       <h2>Мои чаты</h2>
-      <div className="chat-list">
-        {chats.map(chat => {
-          const character = getCharacter(chat.characterId);
-          return (
-            <div
-              key={chat.id}
-              className="chat-list-item"
-              onClick={() => navigate(`/chat/${chat.id}`)}
-            >
-              <div className="chat-list-avatar">
-                {character?.avatar || '🤖'}
-              </div>
-              <div className="chat-list-info">
-                <h4>{character?.name || 'Неизвестный персонаж'}</h4>
-                <p>{chat.lastMessagePreview || 'Нет сообщений'}</p>
-              </div>
-              <span className="chat-list-time">{formatTime(chat.updatedAt)}</span>
-              <button
-                className="chat-list-delete"
-                onClick={e => {
-                  e.stopPropagation();
-                  if (confirm('Удалить чат?')) deleteChat(chat.id);
-                }}
+
+      {sorted.length === 0 ? (
+        <div className="empty-state">
+          <p>У вас пока нет чатов</p>
+          <button onClick={() => navigate('/gallery')}>Начать чат</button>
+        </div>
+      ) : (
+        <div className="chat-list">
+          {sorted.map(chat => {
+            const char = getChar(chat.characterId);
+            return (
+              <div
+                key={chat.id}
+                className="chat-list-item"
+                onClick={() => navigate(`/chat/${chat.id}`)}
               >
-                <Trash2 width={16} height={16} />
-              </button>
-            </div>
-          );
-        })}
-      </div>
+                <div className="chat-avatar">
+                  {char ? renderAvatar(char) : '🤖'}
+                </div>
+                <div className="chat-info">
+                  <div className="chat-info-top">
+                    <h4>{char?.name || 'Чат'}</h4>
+                    <span className="chat-time">{formatTime(chat.updatedAt)}</span>
+                  </div>
+                  <p className="chat-preview">{chat.lastMessagePreview || 'Нет сообщений'}</p>
+                </div>
+                <div className="chat-actions">
+                  <button onClick={e => { e.stopPropagation(); pinChat(chat.id); }}>
+                    <Pin width={16} className={chat.isPinned ? 'pinned' : ''} />
+                  </button>
+                  <button onClick={e => { e.stopPropagation(); deleteChat(chat.id); }}>
+                    <Trash2 width={16} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
+}
+
+function renderAvatar(character: { avatar?: string; avatarType?: string; name?: string }) {
+  if (!character?.avatar) return '🤖';
+  if (character.avatarType === 'url' || character.avatarType === 'generated') {
+    return <img src={character.avatar} alt={character.name} className="avatar-image" />;
+  }
+  return <span className="avatar-emoji">{character.avatar}</span>;
 }
